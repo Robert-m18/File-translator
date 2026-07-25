@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="0002-01-create-refresh-tokens" author="robert">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <tableExists tableName="refresh_tokens"/>
+            </not>
+        </preConditions>
+
+        <createTable tableName="refresh_tokens">
+            <column name="id" type="BIGINT" autoIncrement="true">
+                <constraints primaryKey="true" primaryKeyName="pk_refresh_tokens" nullable="false"/>
+            </column>
+            <!-- Jak przy tokenach weryfikacyjnych: w bazie leży wyłącznie SHA-256 tokenu.
+                 Wyciek dumpu bazy nie daje wtedy działających tokenów odświeżających. -->
+            <column name="token_hash" type="VARCHAR(64)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="user_id" type="BIGINT">
+                <constraints nullable="false"/>
+            </column>
+            <!-- Identyfikator "rodziny": wszystkie tokeny powstałe z kolejnych rotacji
+                 jednej sesji mają ten sam family_id. Pozwala unieważnić cały łańcuch naraz
+                 po wykryciu ponownego użycia zużytego tokenu. -->
+            <column name="family_id" type="VARCHAR(36)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="issued_at" type="${type.datetime}">
+                <constraints nullable="false"/>
+            </column>
+            <column name="expires_at" type="${type.datetime}">
+                <constraints nullable="false"/>
+            </column>
+            <!-- NULL = token aktywny. Data = token zużyty przez rotację albo unieważniony. -->
+            <column name="revoked_at" type="${type.datetime}"/>
+        </createTable>
+
+        <addUniqueConstraint tableName="refresh_tokens"
+                             columnNames="token_hash"
+                             constraintName="uk_refresh_tokens_token_hash"/>
+
+        <createIndex indexName="idx_refresh_tokens_family_id" tableName="refresh_tokens">
+            <column name="family_id"/>
+        </createIndex>
+
+        <!-- Pod zapytanie nocnego joba czyszczącego wygasłe tokeny -->
+        <createIndex indexName="idx_refresh_tokens_expires_at" tableName="refresh_tokens">
+            <column name="expires_at"/>
+        </createIndex>
+
+        <addForeignKeyConstraint baseTableName="refresh_tokens"
+                                 baseColumnNames="user_id"
+                                 constraintName="fk_refresh_tokens_user"
+                                 referencedTableName="users"
+                                 referencedColumnNames="id"
+                                 onDelete="CASCADE"/>
+    </changeSet>
+
+    <changeSet id="0002-02-add-account-lockout-columns" author="robert">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <columnExists tableName="users" columnName="failed_login_attempts"/>
+            </not>
+        </preConditions>
+
+        <addColumn tableName="users">
+            <column name="failed_login_attempts" type="INT" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <!-- NULL = konto odblokowane. Blokada wygasa sama - nie potrzeba joba odblokowującego. -->
+            <column name="locked_until" type="${type.datetime}"/>
+        </addColumn>
+    </changeSet>
+
+</databaseChangeLog>

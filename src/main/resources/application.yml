@@ -1,31 +1,116 @@
-# Base configuration - use application-dev.yml or application-prod.yml for specific environments
-# To activate a profile, set: spring.profiles.active=dev or spring.profiles.active=prod
+# Konfiguracja bazowa - wspólna dla wszystkich profili.
+# Nadpisania środowiskowe: application-dev.yml / application-prod.yml
+# Aktywacja profilu: spring.profiles.active=dev|prod (albo zmienna SPRING_PROFILES_ACTIVE)
 
-#apligation.yml
 spring:
   application:
-    name: demo
+    name: file-translator
   profiles:
-    active: dev
+    active: "${SPRING_PROFILES_ACTIVE:dev}"
   datasource:
     url: "${DATABASE_URL:jdbc:mysql://localhost:3306/userapitest}"
     username: "${DATABASE_USER:root}"
     password: "${DATABASE_PASSWORD:}"
   jpa:
     hibernate:
-      ddl-auto: update
+      # Schemat tworzy WYŁĄCZNIE Liquibase. Hibernate ma go tylko zweryfikować
+      # i wysypać aplikację przy starcie, jeśli encje rozjechały się z bazą.
+      ddl-auto: validate
+    # Wyłączone celowo: OSIV trzyma sesję Hibernate otwartą przez cały request,
+    # co ukrywa błędy lazy-loadingu i blokuje połączenie z puli dłużej niż trzeba.
+    open-in-view: false
     show-sql: false
+  liquibase:
+    # Bez tego Spring Boot szuka domyślnie db/changelog/db.changelog-master.yaml
+    # i po cichu nie uruchamia żadnych migracji.
+    change-log: classpath:db/changelog/db.changelog-master.xml
+
 server:
-  port: 2009
+  port: "${SERVER_PORT:2009}"
 
 jwt:
   secret: "${JWT_SECRET}"
-  expiration: 900000
-  refresh-expiration: 604800000
+  expiration: 900000          # 15 min
+  refresh-expiration: 604800000   # 7 dni
 
 app:
   frontend:
     url: "${FRONTEND_URL:http://localhost:5173}"
+  cookie:
+    # secure=true wymaga HTTPS - na localhost po http przeglądarka takie ciasteczko odrzuci
+    secure: "${COOKIE_SECURE:true}"
+    same-site: "${COOKIE_SAME_SITE:Strict}"
+    # Ścieżka /auth, a nie /auth/refresh: przy węższej ścieżce przeglądarka nie wysyłała
+    # ciasteczka do /auth/logout, więc serwer nie wiedział, którą sesję unieważnić.
+    # Nadal znacznie węziej niż "/" - token odświeżający nie krąży przy każdym żądaniu do API.
+    refresh-token-path: /auth
+    # Czas życia ciasteczek wyprowadzony z konfiguracji JWT - jedno źródło prawdy,
+    # ciasteczko nie może przeżyć tokenu, który zawiera.
+    access-token-max-age: "${jwt.expiration}ms"
+    refresh-token-max-age: "${jwt.refresh-expiration}ms"
+
+  # Blokada konta po serii nieudanych logowań - chroni konkretne konto przed
+  # zgadywaniem hasła, także gdy próby idą z wielu adresów IP.
+  account-lock:
+    enabled: true
+    max-attempts: 5
+    lock-duration: 15m
+
+  # Limity liczby żądań - chronią serwer i pozostałych użytkowników.
+  # Próg logowania jest wyższy niż max-attempts blokady konta, żeby limit per IP
+  # nie odcinał żądań, zanim w ogóle zadziała blokada konkretnego konta
+  # (i żeby kilka osób za jednym NAT-em mogło się normalnie logować).
+  rate-limit:
+    enabled: true
+    # memory - kubełki w pamięci procesu; poprawne tylko przy JEDNEJ instancji aplikacji
+    # redis  - wspólny magazyn dla wszystkich instancji; wymagane przy skalowaniu poziomym,
+    #          bo inaczej każda instancja liczy limit osobno i realny próg jest N razy wyższy
+    store: "${RATE_LIMIT_STORE:memory}"
+    redis-url: "${RATE_LIMIT_REDIS_URL:}"
+    policies:
+      - path: /auth/login
+        capacity: 10
+        period: 1m
+      - path: /auth/register
+        capacity: 5
+        period: 1h
+      - path: /auth/confirm
+        capacity: 20
+        period: 1h
+      - path: /auth/refresh
+        capacity: 30
+        period: 1m
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      # Osobne endpointy /health/liveness i /health/readiness dla orkiestratora (k8s, ECS)
+      probes:
+        enabled: true
+      show-details: when-authorized
+  health:
+    mail:
+      # Wyłączone celowo. Health check to odpowiedź na pytanie "czy ta instancja może
+      # obsługiwać ruch", a nie "czy wszystkie usługi zewnętrzne żyją". Wysyłka maili
+      # jest asynchroniczna i nie blokuje żadnego endpointu, więc niedostępny SMTP
+      # nie może przestawiać całej aplikacji na DOWN - w Kubernetesie oznaczałoby to
+      # restartowanie w pełni sprawnych podów przez awarię dostawcy poczty.
+      # Baza danych zostaje w health checku, bo bez niej API faktycznie nie działa.
+      enabled: false
+  info:
+    env:
+      enabled: true
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+    operations-sorter: method
+  api-docs:
+    path: /v3/api-docs
 
 logging:
   level:

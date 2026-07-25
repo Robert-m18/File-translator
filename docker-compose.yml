@@ -1,0 +1,91 @@
+# Kompletne środowisko deweloperskie: `docker compose up -d`
+#
+# Sens tego pliku: nowa osoba (albo ja na innym komputerze) uruchamia projekt
+# jedną komendą, bez ręcznego instalowania MySQL-a i konfigurowania konta SMTP.
+
+services:
+
+  mysql:
+    image: mysql:8.4
+    container_name: ft-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: userapitest
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      # Aplikacja musi poczekać, aż baza faktycznie przyjmuje połączenia.
+      # Sam fakt, że kontener wystartował, tego nie oznacza - stąd healthcheck
+      # i depends_on: condition: service_healthy poniżej.
+      test: [ "CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot" ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  # Lokalny serwer SMTP z interfejsem webowym - maile weryfikacyjne zostają
+  # na maszynie i widać je pod http://localhost:8025. Żadnych zewnętrznych kont.
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: ft-mailpit
+    ports:
+      - "1025:1025"   # SMTP
+      - "8025:8025"   # UI
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
+
+  # Wspólny magazyn limitów żądań. Potrzebny dopiero przy skalowaniu poziomym -
+  # przy jednej instancji aplikacja domyślnie liczy limity w pamięci i Redis stoi bezczynnie.
+  # Żeby go faktycznie użyć, ustaw RATE_LIMIT_STORE=redis w sekcji app poniżej.
+  redis:
+    image: redis:7-alpine
+    container_name: ft-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    build:
+      context: .
+    container_name: ft-app
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "2009:2009"
+    environment:
+      SPRING_PROFILES_ACTIVE: dev
+      SERVER_PORT: 2009
+      # Host "mysql" to nazwa usługi w sieci Compose'a, nie localhost -
+      # z wnętrza kontenera localhost oznacza sam kontener aplikacji.
+      DATABASE_URL: jdbc:mysql://mysql:3306/userapitest
+      DATABASE_USER: root
+      DATABASE_PASSWORD: root
+      MAIL_HOST: mailpit
+      MAIL_PORT: 1025
+      MAIL_SMTP_AUTH: "false"
+      MAIL_SMTP_STARTTLS: "false"
+      FRONTEND_URL: http://localhost:5173
+      COOKIE_SECURE: "false"
+      COOKIE_SAME_SITE: Lax
+      # Zmień na "redis", żeby limity były wspólne dla wszystkich instancji aplikacji
+      RATE_LIMIT_STORE: memory
+      RATE_LIMIT_REDIS_URL: redis://redis:6379
+    healthcheck:
+      test: [ "CMD", "wget", "-qO-", "http://localhost:2009/actuator/health" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
+volumes:
+  mysql-data:

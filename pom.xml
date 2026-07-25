@@ -16,7 +16,13 @@
 	<properties>
 		<java.version>21</java.version>
 		<mapstruct.version>1.5.5.Final</mapstruct.version>
+		<springdoc.version>3.0.0</springdoc.version>
+		<bucket4j.version>8.14.0</bucket4j.version>
+		<jacoco.version>0.8.13</jacoco.version>
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+		<!-- Wypełniane przez jacoco:prepare-agent; pusta wartość domyślna sprawia,
+		     że Surefire działa też wtedy, gdy JaCoCo nie zostało uruchomione. -->
+		<surefireArgLine/>
 	</properties>
 	<dependencies>
 		<dependency>
@@ -35,6 +41,15 @@
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-webmvc</artifactId>
 		</dependency>
+		<!-- Mail and template engine for transactional emails -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-mail</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-thymeleaf</artifactId>
+		</dependency>
 		<dependency>
 			<groupId>org.projectlombok</groupId>
 			<artifactId>lombok</artifactId>
@@ -52,6 +67,13 @@
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<!-- MockMvc i @AutoConfigureMockMvc. W Boot 4 wydzielone ze spring-boot-starter-test
+		     do osobnego startera dla webmvc. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-webmvc-test</artifactId>
 			<scope>test</scope>
 		</dependency>
 		<dependency>
@@ -81,6 +103,63 @@
 			<groupId>com.h2database</groupId>
 			<artifactId>h2</artifactId>
 			<scope>test</scope>
+		</dependency>
+		<!-- Migracje bazy danych.
+		     UWAGA: w Spring Boot 4 autokonfiguracje zostały wyniesione z spring-boot-autoconfigure
+		     do osobnych modułów. Sam liquibase-core NIE uruchamia migracji - potrzebny jest
+		     dodatkowo moduł spring-boot-liquibase z LiquibaseAutoConfiguration. -->
+		<dependency>
+			<groupId>org.liquibase</groupId>
+			<artifactId>liquibase-core</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-liquibase</artifactId>
+		</dependency>
+
+		<!-- Health checki, metryki, endpointy operacyjne -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-actuator</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>io.micrometer</groupId>
+			<artifactId>micrometer-registry-prometheus</artifactId>
+			<scope>runtime</scope>
+		</dependency>
+
+		<!-- Ograniczanie liczby żądań (token bucket). Wariant _jdk17 to build
+		     skompilowany pod nowsze JDK, z tym samym API co bucket4j-core. -->
+		<dependency>
+			<groupId>com.bucket4j</groupId>
+			<artifactId>bucket4j_jdk17-core</artifactId>
+			<version>${bucket4j.version}</version>
+		</dependency>
+		<!-- Cache z ograniczonym rozmiarem i TTL - przechowuje kubełki limitów w pamięci.
+		     Zwykła ConcurrentHashMap rosłaby w nieskończoność przy ataku z wielu adresów IP. -->
+		<dependency>
+			<groupId>com.github.ben-manes.caffeine</groupId>
+			<artifactId>caffeine</artifactId>
+		</dependency>
+		<!-- Rozproszony magazyn limitów (opcjonalny, włączany przez app.rate-limit.store=redis).
+		     Ciągnie za sobą klienta lettuce-core - świadomie BEZ spring-boot-starter-data-redis,
+		     żeby Redis nie stał się zależnością startu aplikacji, dopóki nie jest używany. -->
+		<dependency>
+			<groupId>com.bucket4j</groupId>
+			<artifactId>bucket4j_jdk17-lettuce</artifactId>
+			<version>${bucket4j.version}</version>
+		</dependency>
+		<!-- Klient Redisa. Wersją zarządza BOM Spring Boota, więc bez podawania jej tutaj. -->
+		<dependency>
+			<groupId>io.lettuce</groupId>
+			<artifactId>lettuce-core</artifactId>
+		</dependency>
+
+		<!-- Dokumentacja API generowana z kodu (OpenAPI 3 + Swagger UI) -->
+		<dependency>
+			<groupId>org.springdoc</groupId>
+			<artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+			<version>${springdoc.version}</version>
 		</dependency>
 	</dependencies>
 
@@ -164,11 +243,51 @@
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-surefire-plugin</artifactId>
 				<configuration>
-					<!-- -javaagent: rejestruje Mockito jako agenta JVM od razu przy starcie,
+					<!-- @{surefireArgLine}: agent JaCoCo. Musi być tutaj, bo jawne <argLine>
+					     nadpisuje to, co JaCoCo wstrzykuje domyślnie - klasyczna przyczyna
+					     raportów pokrycia pokazujących 0%.
+					     Składnia @{...}, a nie ${...}: Surefire rozwija @{...} dopiero
+					     w momencie uruchomienia testów, czyli po tym, jak jacoco:prepare-agent
+					     ustawi tę właściwość. ${...} zostałoby podstawione już przy wczytywaniu
+					     POM-a - wtedy pustą wartością domyślną, i agent nigdy by nie wystartował.
+					     -javaagent: rejestruje Mockito jako agenta JVM od razu przy starcie,
 					     zamiast pozwalać mu dołączać się dynamicznie w locie (co JDK
 					     będzie blokować w przyszłych wersjach - stąd ostrzeżenie w logach).
 					     -Dfile.encoding=UTF-8: naprawia zniekształcone polskie znaki w logach na Windows. -->
-					<argLine>-javaagent:${org.mockito:mockito-core:jar} -Dfile.encoding=UTF-8</argLine>
+					<argLine>@{surefireArgLine} -javaagent:${org.mockito:mockito-core:jar} -Dfile.encoding=UTF-8</argLine>
+				</configuration>
+			</plugin>
+
+			<!-- Pokrycie testami: raport HTML/XML w target/site/jacoco (generowany w fazie verify) -->
+			<plugin>
+				<groupId>org.jacoco</groupId>
+				<artifactId>jacoco-maven-plugin</artifactId>
+				<version>${jacoco.version}</version>
+				<executions>
+					<execution>
+						<id>prepare-agent</id>
+						<goals>
+							<goal>prepare-agent</goal>
+						</goals>
+						<configuration>
+							<propertyName>surefireArgLine</propertyName>
+						</configuration>
+					</execution>
+					<execution>
+						<id>report</id>
+						<phase>verify</phase>
+						<goals>
+							<goal>report</goal>
+						</goals>
+					</execution>
+				</executions>
+				<configuration>
+					<excludes>
+						<!-- Klasy generowane / bez logiki - zaniżałyby statystykę bez powodu -->
+						<exclude>**/FileTranslatorApplication.class</exclude>
+						<exclude>**/dto/**</exclude>
+						<exclude>**/*MapperImpl.class</exclude>
+					</excludes>
 				</configuration>
 			</plugin>
 		</plugins>

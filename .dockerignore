@@ -1,0 +1,15 @@
+# Im mniejszy kontekst budowania, tym szybszy build i mniejsze ryzyko
+# przypadkowego wrzucenia sekretów do obrazu.
+target/
+logs/
+.git/
+.gitignore
+.idea/
+*.iml
+.mvn/wrapper/maven-wrapper.jar
+.env
+*.md
+!README.md
+.github/
+docker-compose.yml
+Dockerfile

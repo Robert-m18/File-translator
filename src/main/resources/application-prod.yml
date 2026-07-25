@@ -1,33 +1,60 @@
-#apligation-prod.yml
+# Profil produkcyjny - żadnych sekretów w repo, wszystko z env.
+# Aplikacja ma się NIE uruchomić, jeśli którejkolwiek zmiennej brakuje.
+
 spring:
-  application:
-    name: demo
   datasource:
     url: "${DATABASE_URL}"
     username: "${DATABASE_USER}"
     password: "${DATABASE_PASSWORD}"
   jpa:
-    hibernate:
-      ddl-auto: validate
     show-sql: false
+  mail:
+    host: "${MAIL_HOST}"
+    port: "${MAIL_PORT:587}"
+    username: "${MAIL_USERNAME}"
+    password: "${MAIL_PASSWORD}"
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
 
 server:
-  port: 8080
+  port: "${SERVER_PORT:8080}"
+  # Aplikacja stoi za reverse proxy (nginx / ALB) - bez tego Spring nie wie,
+  # że oryginalny request przyszedł po HTTPS, i generuje złe linki/redirecty.
+  forward-headers-strategy: framework
 
 jwt:
   secret: "${JWT_SECRET}"
-  expiration: 900000
-  refresh-expiration: 604800000
 
 app:
   frontend:
     url: "${FRONTEND_URL}"
+  cookie:
+    secure: true
+    same-site: Strict
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      show-details: when-authorized
+
+springdoc:
+  # Publiczne Swagger UI na produkcji to darmowa mapa API dla atakującego.
+  swagger-ui:
+    enabled: false
+  api-docs:
+    enabled: false
 
 logging:
   level:
     root: WARN
     com.example.robert: INFO
-  pattern:
-    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
   file:
     name: logs/app.log

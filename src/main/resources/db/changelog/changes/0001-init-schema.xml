@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+        Baseline schematu. Wcześniejsze changelogi (20260720-00x) nigdy się nie wykonały
+        (brak spring.liquibase.change-log w konfiguracji + kilka bloków <preConditions>
+        w jednym changesecie, czego Liquibase nie akceptuje), więc zostały zastąpione
+        tym jednym, spójnym baseline'em.
+
+        preConditions onFail="MARK_RAN" pozwala uruchomić to na bazie deweloperskiej,
+        którą wcześniej stworzył Hibernate przez ddl-auto: update - changeset zostanie
+        wtedy tylko odnotowany jako wykonany, bez próby tworzenia istniejących tabel.
+    -->
+
+    <changeSet id="0001-01-create-users" author="robert">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <tableExists tableName="users"/>
+            </not>
+        </preConditions>
+
+        <createTable tableName="users">
+            <column name="id" type="BIGINT" autoIncrement="true">
+                <constraints primaryKey="true" primaryKeyName="pk_users" nullable="false"/>
+            </column>
+            <column name="name" type="VARCHAR(50)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="email" type="VARCHAR(255)">
+                <constraints nullable="false"/>
+            </column>
+            <!-- BCrypt zawsze produkuje 60 znaków; zapas na wypadek zmiany algorytmu (np. Argon2) -->
+            <column name="password" type="VARCHAR(100)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="role" type="VARCHAR(20)" defaultValue="USER">
+                <constraints nullable="false"/>
+            </column>
+            <!-- Konto nieaktywne do czasu potwierdzenia adresu email -->
+            <column name="enabled" type="${type.boolean}" defaultValueBoolean="false">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+
+        <addUniqueConstraint tableName="users"
+                             columnNames="email"
+                             constraintName="uk_users_email"/>
+    </changeSet>
+
+    <changeSet id="0001-02-create-verification-tokens" author="robert">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <tableExists tableName="verification_tokens"/>
+            </not>
+        </preConditions>
+
+        <createTable tableName="verification_tokens">
+            <column name="id" type="BIGINT" autoIncrement="true">
+                <constraints primaryKey="true" primaryKeyName="pk_verification_tokens" nullable="false"/>
+            </column>
+            <!-- Trzymamy wyłącznie SHA-256 (64 znaki hex) surowego tokenu z maila -->
+            <column name="token_hash" type="VARCHAR(64)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="user_id" type="BIGINT">
+                <constraints nullable="false"/>
+            </column>
+            <column name="expiry_date" type="${type.datetime}">
+                <constraints nullable="false"/>
+            </column>
+        </createTable>
+
+        <addUniqueConstraint tableName="verification_tokens"
+                             columnNames="token_hash"
+                             constraintName="uk_verification_tokens_token_hash"/>
+
+        <addForeignKeyConstraint baseTableName="verification_tokens"
+                                 baseColumnNames="user_id"
+                                 constraintName="fk_verification_tokens_user"
+                                 referencedTableName="users"
+                                 referencedColumnNames="id"
+                                 onDelete="CASCADE"/>
+    </changeSet>
+
+</databaseChangeLog>

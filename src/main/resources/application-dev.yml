@@ -1,33 +1,46 @@
-#apligation-dev.yml
+# Profil deweloperski - lokalny MySQL + Mailpit/Mailtrap.
+# Wszystko tutaj jest jawne i nadpisywalne zmiennymi środowiskowymi (patrz docker-compose.yml).
 
 spring:
-  application:
-    name: demo
   datasource:
-    url: "jdbc:mysql://localhost:3306/userapitest"
-    username: root
-    password: ""
+    url: "${DATABASE_URL:jdbc:mysql://localhost:3306/userapitest}"
+    username: "${DATABASE_USER:root}"
+    password: "${DATABASE_PASSWORD:}"
   jpa:
-    hibernate:
-      ddl-auto: update
     show-sql: true
-
-server:
-  port: 2009
+  mail:
+    host: "${MAIL_HOST:sandbox.smtp.mailtrap.io}"
+    port: "${MAIL_PORT:2525}"
+    username: "${MAILTRAP_USERNAME:dev_test_user}"
+    password: "${MAILTRAP_PASSWORD:dev_test_pass}"
+    properties:
+      mail:
+        smtp:
+          auth: "${MAIL_SMTP_AUTH:true}"
+          starttls:
+            enable: "${MAIL_SMTP_STARTTLS:true}"
 
 jwt:
-  secret: "dev-only-secret-nie-uzywac-na-produkcji-min-32-znaki"
-  expiration: 900000
-  refresh-expiration: 604800000
+  # Sekret wyłącznie na dev - NIGDY nie używać na produkcji (tam wymuszony przez env JWT_SECRET).
+  secret: "${JWT_SECRET:devonlysecretnieuzywacnaprodukcjimin32znaki1111111111111111=}"
 
 app:
   frontend:
-    url: "http://localhost:5173"
+    url: "${FRONTEND_URL:http://localhost:5173}"
+  cookie:
+    # Na localhost lecimy po http, więc Secure musi być wyłączone -
+    # inaczej przeglądarka w ogóle nie zapisze ciasteczka i logowanie "nie działa" bez błędu.
+    secure: false
+    same-site: Lax
+
+management:
+  endpoint:
+    health:
+      show-details: always
 
 logging:
   level:
     root: INFO
     com.example.robert: DEBUG
-  pattern:
-    console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
-
+    org.springframework.security: DEBUG
+    liquibase: INFO

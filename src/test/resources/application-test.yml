@@ -1,16 +1,41 @@
+# Profil testowy - H2 w pamięci, bez potrzeby stawiania MySQL-a.
+#
+# Świadomie NIE używamy tu ddl-auto: create-drop. Schemat budują te same migracje
+# Liquibase co na produkcji, a Hibernate je potem weryfikuje (ddl-auto: validate).
+# Dzięki temu zwykłe `mvn test` wykrywa rozjazd encji z migracjami oraz błędy
+# w samych changelogach - zamiast maskować je autogeneracją schematu.
+
 spring:
   datasource:
+    # Bez DATABASE_TO_LOWER: H2 normalizuje niecytowane identyfikatory do wielkich liter,
+    # tak samo jak zakłada Liquibase dla swojej tabeli DATABASECHANGELOG. Wymuszenie
+    # małych liter powodowało, że przy drugim kontekście Springa (baza żyje dłużej niż
+    # pojedynczy kontekst przez DB_CLOSE_DELAY=-1) Liquibase nie znajdował własnej
+    # tabeli śledzącej i próbował utworzyć ją ponownie.
     url: "jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1;MODE=MySQL"
     driver-class-name: org.h2.Driver
     username: sa
     password: ""
   jpa:
     hibernate:
-      ddl-auto: create-drop
+      ddl-auto: validate
     show-sql: false
+  liquibase:
+    change-log: classpath:db/changelog/db.changelog-master.xml
   h2:
     console:
       enabled: false
+  mail:
+    host: localhost
+    port: 25
+    username: test@localhost
+    password: test
+    properties:
+      mail:
+        smtp:
+          auth: false
+          starttls:
+            enable: false
 
 jwt:
   secret: "/26qw1Fh9D6pEAcJpLvCfVDQl0tqYmylZ+EsvPGW4QY="
@@ -20,3 +45,21 @@ jwt:
 app:
   frontend:
     url: "http://localhost:5173"
+  cookie:
+    secure: false
+    same-site: Lax
+  # Domyślnie wyłączone: limit jest stanowy i przechodziłby między testami w tej samej
+  # instancji JVM, przez co wynik zależałby od kolejności wykonania. Testy, które
+  # sprawdzają sam limiter, włączają go u siebie przez @TestPropertySource.
+  rate-limit:
+    enabled: false
+    store: memory
+    policies: []
+  account-lock:
+    enabled: true
+    max-attempts: 3
+    lock-duration: 15m
+
+logging:
+  level:
+    liquibase: WARN
