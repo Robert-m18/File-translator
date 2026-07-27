@@ -5,8 +5,8 @@
 package com.example.robert.user.dto;
 
 import com.example.robert.common.validation.ValidEmail;
+import com.example.robert.common.validation.ValidPassword;
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
 public record UserRequestDTO(
@@ -21,19 +21,14 @@ public record UserRequestDTO(
         String email,
 
         /*
-         * Polityka hasła egzekwowana jest TUTAJ, na danych wejściowych.
-         * Wcześniej stała na encji User jako @Size(min = 8) - a tam trafia już hash
-         * BCrypt (zawsze 60 znaków), więc realnie przechodziło dowolne hasło, także "a".
+         * Polityka hasła egzekwowana jest na danych wejściowych, nigdy na encji.
+         * Na encji User stała kiedyś jako @Size(min = 8) - a tam trafia już hash BCrypt
+         * (zawsze 60 znaków), więc realnie przechodziło dowolne hasło, także "a".
          *
-         * Górny limit 72 nie jest widzimisię: BCrypt ucina wejście po 72 bajtach,
-         * więc dłuższe hasło daje użytkownikowi fałszywe poczucie bezpieczeństwa.
+         * Same reguły siedzą w @ValidPassword, bo hasło przychodzi też przy resecie
+         * (ResetPasswordRequest) i dwa skopiowane zestawy adnotacji by się rozjechały.
          */
-        @NotBlank(message = "Hasło nie może być puste")
-        @Size(min = 8, max = 72, message = "Hasło musi mieć od {min} do {max} znaków")
-        @Pattern(
-                regexp = "^(?=.*[a-zA-Z])(?=.*\\d).+$",
-                message = "Hasło musi zawierać co najmniej jedną literę i jedną cyfrę"
-        )
+        @ValidPassword
         String password
 
 ) {}

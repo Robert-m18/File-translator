@@ -7,6 +7,13 @@ spring:
     name: file-translator
   profiles:
     active: "${SPRING_PROFILES_ACTIVE:dev}"
+  task:
+    scheduling:
+      # Domyślnie harmonogram ma JEDEN wątek, a mamy dwa zadania: nocne sprzątanie
+      # i wysyłkę ze skrzynki nadawczej co 10 s. Przy jednym wątku długie sprzątanie
+      # wstrzymywałoby wysyłkę maili.
+      pool:
+        size: 2
   datasource:
     url: "${DATABASE_URL:jdbc:mysql://localhost:3306/userapitest}"
     username: "${DATABASE_USER:root}"
@@ -49,6 +56,21 @@ app:
     access-token-max-age: "${jwt.expiration}ms"
     refresh-token-max-age: "${jwt.refresh-expiration}ms"
 
+  # Skrzynka nadawcza maili. Uzasadnienie wzorca: changelog 0005-mail-outbox.xml.
+  outbox:
+    enabled: true
+    # Opóźnienie wysyłki do tej wartości jest akceptowalne przy mailach transakcyjnych.
+    # Gdyby przestało być, zamiast skracania interwału właściwym krokiem jest CDC.
+    poll-interval: 10s
+    batch-size: 50
+    max-attempts: 5
+    # Rośnie wykładniczo: 30s, 1m, 2m, 4m - chwilowa awaria SMTP nie zamienia się
+    # w dobijanie serwera co sekundę.
+    retry-backoff: 30s
+    # Musi być wyraźnie dłuższe niż realny czas wysyłki, inaczej druga instancja
+    # zabierze wiersz, gdy pierwsza jeszcze czeka na odpowiedź SMTP.
+    claim-timeout: 2m
+
   # Blokada konta po serii nieudanych logowań - chroni konkretne konto przed
   # zgadywaniem hasła, także gdy próby idą z wielu adresów IP.
   account-lock:
@@ -76,6 +98,16 @@ app:
         period: 1h
       - path: /auth/confirm
         capacity: 20
+        period: 1h
+      # Ostro, bo każde żądanie to mail wysłany na cudzy adres - bez limitu endpoint
+      # nadaje się do zasypania czyjejś skrzynki naszymi wiadomościami.
+      - path: /auth/forgot-password
+        capacity: 3
+        period: 1h
+      # Luźniej niż forgot-password: tu żądanie nie generuje maila, a użytkownik może
+      # kilka razy nie trafić w politykę hasła. Token i tak jest jednorazowy.
+      - path: /auth/reset-password
+        capacity: 10
         period: 1h
       - path: /auth/refresh
         capacity: 30

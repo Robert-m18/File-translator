@@ -12,6 +12,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.web.access.AccessDeniedHandler;
+import org.springframework.security.web.csrf.CsrfException;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -37,6 +38,23 @@ public class RestAccessDeniedHandler implements AccessDeniedHandler {
                        AccessDeniedException accessDeniedException) throws IOException {
 
         log.warn("Odmowa dostępu: {} {}", request.getMethod(), request.getRequestURI());
+
+        /*
+         * Brak lub nieważny token CSRF dostaje własny kod, mimo że status jest ten sam.
+         * Rozróżnienie jest praktyczne: przy CSRF_TOKEN_INVALID frontend ma pobrać nowy
+         * token z GET /auth/csrf i powtórzyć żądanie, a przy ACCESS_DENIED nie ma czego
+         * powtarzać - uprawnień to nie zmieni. Bez tego front albo zapętla się na
+         * odmowach, albo wyrzuca użytkownika po wygaśnięciu tokenu CSRF.
+         */
+        if (accessDeniedException instanceof CsrfException) {
+            problemWriter.write(response, ApiProblem.of(
+                    HttpStatus.FORBIDDEN,
+                    "Nieprawidłowy token CSRF",
+                    "Brak lub nieważny token CSRF - pobierz nowy i powtórz żądanie",
+                    "CSRF_TOKEN_INVALID"
+            ));
+            return;
+        }
 
         problemWriter.write(response, ApiProblem.of(
                 HttpStatus.FORBIDDEN,

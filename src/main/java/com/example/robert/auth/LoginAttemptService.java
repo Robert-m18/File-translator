@@ -48,6 +48,11 @@ public class LoginAttemptService {
             return;
         }
 
+        // Najpierw sprzątamy po blokadzie, która już wygasła. Inaczej licznik zostaje
+        // na progu z poprzedniej serii i ta jedna próba blokuje konto od razu -
+        // szczegóły przy UserRepository.clearExpiredLock.
+        userRepository.clearExpiredLock(email, LocalDateTime.now());
+
         int updated = userRepository.incrementFailedLoginAttempts(email);
         if (updated == 0) {
             // Nie ma takiego konta. Świadomie nie prowadzimy licznika dla nieistniejących

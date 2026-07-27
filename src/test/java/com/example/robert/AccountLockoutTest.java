@@ -10,11 +10,15 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.time.LocalDateTime;
+
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -47,6 +51,9 @@ class AccountLockoutTest {
     @Autowired
     private PasswordEncoder passwordEncoder;
 
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
     @BeforeEach
     void setUp() {
         userRepository.findByEmail(EMAIL).ifPresent(userRepository::delete);
@@ -66,6 +73,7 @@ class AccountLockoutTest {
                 """.formatted(EMAIL, password);
 
         return mockMvc.perform(post("/auth/login")
+                        .with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andReturn().getResponse().getStatus();
@@ -90,10 +98,40 @@ class AccountLockoutTest {
                 """.formatted(EMAIL, PASSWORD);
 
         mockMvc.perform(post("/auth/login")
+                        .with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isLocked())
                 .andExpect(jsonPath("$.code").value("ACCOUNT_LOCKED"));
+    }
+
+    @Test
+    @DisplayName("Po wygaśnięciu blokady jedna literówka nie blokuje konta od razu")
+    void expiredLockShouldResetCounter() throws Exception {
+        // Doprowadzamy konto do blokady (profil testowy: próg 3)
+        attemptLogin("ZleHaslo1");
+        attemptLogin("ZleHaslo1");
+        attemptLogin("ZleHaslo1");
+
+        User locked = userRepository.findByEmail(EMAIL).orElseThrow();
+        assertThat(locked.getLockedUntil()).isNotNull();
+        assertThat(locked.getFailedLoginAttempts()).isEqualTo(3);
+
+        // Cofamy blokadę w czasie, jakby minęło jej 15 minut. Licznik ZOSTAJE na 3 -
+        // i to jest stan, w którym poprzednia wersja natychmiast blokowała konto ponownie.
+        jdbcTemplate.update("update users set locked_until = ? where email = ?",
+                LocalDateTime.now().minusMinutes(1), EMAIL);
+
+        // Jedna pomyłka po wygaśnięciu blokady: 401, ale konto MUSI zostać otwarte
+        assertThat(attemptLogin("ZleHaslo1")).isEqualTo(401);
+
+        User after = userRepository.findByEmail(EMAIL).orElseThrow();
+        assertThat(after.getLockedUntil()).isNull();
+        // Licznik startuje od nowa: 0 (po zdjęciu blokady) + 1 (ta próba)
+        assertThat(after.getFailedLoginAttempts()).isEqualTo(1);
+
+        // Poprawne hasło od razu przechodzi - użytkownik nie wpada w pętlę blokad
+        assertThat(attemptLogin(PASSWORD)).isEqualTo(200);
     }
 
     @Test

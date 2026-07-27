@@ -9,9 +9,11 @@ import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 
+import static org.hamcrest.Matchers.blankOrNullString;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.notNullValue;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
@@ -35,7 +37,9 @@ class ApiContractTest {
     @Test
     @DisplayName("Żądanie bez tokenu do chronionego zasobu zwraca 401 w formacie ProblemDetail")
     void protectedEndpointWithoutToken_shouldReturnProblemDetail401() throws Exception {
-        mockMvc.perform(get("/users"))
+        // /actuator/metrics, a nie /users - to drugie nie ma już kontrolera, więc test
+        // sprawdzałby regułę autoryzacji dla ścieżki bez handlera.
+        mockMvc.perform(get("/actuator/metrics"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
                 .andExpect(jsonPath("$.status").value(401))
@@ -65,6 +69,7 @@ class ApiContractTest {
                 """;
 
         mockMvc.perform(post("/auth/register")
+                        .with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isBadRequest())
@@ -82,6 +87,7 @@ class ApiContractTest {
                 """;
 
         mockMvc.perform(post("/auth/register")
+                        .with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isBadRequest())
@@ -96,6 +102,7 @@ class ApiContractTest {
                 """;
 
         mockMvc.perform(post("/auth/login")
+                        .with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isUnauthorized())
@@ -112,6 +119,41 @@ class ApiContractTest {
 
         mockMvc.perform(get("/actuator/metrics"))
                 .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @DisplayName("Żądanie zmieniające stan bez tokenu CSRF jest odrzucane z własnym kodem")
+    void stateChangingRequestWithoutCsrfToken_shouldReturn403() throws Exception {
+        // Bez .with(csrf()) - dokładnie tak wygląda żądanie wysłane przez obcą stronę.
+        // Kod CSRF_TOKEN_INVALID, a nie ACCESS_DENIED: front ma pobrać nowy token
+        // i powtórzyć żądanie, a nie wyrzucać użytkownika.
+        mockMvc.perform(post("/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"email":"ktokolwiek@example.com","password":"Haslo1234"}
+                                """))
+                .andExpect(status().isForbidden())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.code").value("CSRF_TOKEN_INVALID"));
+    }
+
+    @Test
+    @DisplayName("Token CSRF jest wydawany w ciele odpowiedzi, nie tylko w ciasteczku")
+    void csrfEndpoint_shouldReturnTokenInBody() throws Exception {
+        /*
+         * Wartość musi być w ciele, bo przy froncie na innej domenie JavaScript nie ma
+         * jak odczytać ciasteczka wystawionego przez API - i to jest tu sprawdzane.
+         *
+         * Konkretnej nazwy nagłówka świadomie NIE sprawdzamy. spring-security-test przy
+         * pierwszym użyciu .with(csrf()) podstawia własne repozytorium tokenów na cały
+         * kontekst serwletu, więc od tej chwili endpoint zwraca nazwę z biblioteki
+         * testowej, a nie z naszej konfiguracji. Asercja na "X-XSRF-TOKEN" przechodziłaby
+         * w izolacji i wywalała się w pełnym przebiegu, zależnie od kolejności klas.
+         */
+        mockMvc.perform(get("/auth/csrf"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.token").value(notNullValue()))
+                .andExpect(jsonPath("$.headerName").value(not(blankOrNullString())));
     }
 
     @Test

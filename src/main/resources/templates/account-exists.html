@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8"/>
+    <title>Konto już istnieje</title>
+</head>
+<!--
+    Ten mail jest częścią ochrony przed sondowaniem adresów. Rejestracja na adres,
+    który ma już konto, zwraca dokładnie tę samą odpowiedź HTTP co rejestracja na adres
+    nowy - informację o tym, że konto istnieje, dostaje wyłącznie właściciel skrzynki.
+-->
+<body style="margin:0; padding:0; background-color:#f4f4f7; font-family:Arial, Helvetica, sans-serif;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f4f7; padding:32px 0;">
+    <tr>
+        <td align="center">
+            <table role="presentation" width="480" cellpadding="0" cellspacing="0"
+                   style="background-color:#ffffff; border-radius:8px; overflow:hidden;">
+                <tr>
+                    <td style="background-color:#2563eb; padding:24px; text-align:center;">
+                        <span style="color:#ffffff; font-size:20px; font-weight:bold;">Twoja Aplikacja</span>
+                    </td>
+                </tr>
+                <tr>
+                    <td style="padding:32px;">
+                        <p style="font-size:15px; color:#374151; line-height:1.5; margin:0 0 24px 0;">
+                            Ktoś próbował zarejestrować konto na ten adres e-mail, ale konto
+                            już u nas istnieje. Nie utworzyliśmy niczego nowego.
+                        </p>
+                        <p style="font-size:15px; color:#374151; line-height:1.5; margin:0 0 24px 0;">
+                            Jeśli to Ty i nie pamiętasz hasła, skorzystaj z opcji ustawienia
+                            nowego hasła:
+                        </p>
+                        <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 auto;">
+                            <tr>
+                                <td style="border-radius:6px; background-color:#2563eb;">
+                                    <a th:href="${forgotPasswordLink}"
+                                       style="display:inline-block; padding:14px 28px; font-size:15px; color:#ffffff; text-decoration:none; font-weight:bold;">
+                                        Nie pamiętam hasła
+                                    </a>
+                                </td>
+                            </tr>
+                        </table>
+                        <p style="font-size:13px; color:#9ca3af; margin:24px 0 0 0; line-height:1.5;">
+                            Jeśli to nie Ty, zignoruj tę wiadomość. Nikt nie uzyskał dostępu
+                            do Twojego konta i nic w nim nie zostało zmienione.
+                        </p>
+                    </td>
+                </tr>
+            </table>
+        </td>
+    </tr>
+</table>
+</body>
+</html>

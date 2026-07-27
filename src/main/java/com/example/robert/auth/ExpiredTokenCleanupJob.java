@@ -4,8 +4,9 @@
  */
 package com.example.robert.auth;
 
+import com.example.robert.auth.repository.PasswordResetTokenRepository;
+import com.example.robert.auth.repository.PendingRegistrationRepository;
 import com.example.robert.auth.repository.RefreshTokenRepository;
-import com.example.robert.auth.repository.VerificationTokenRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -15,7 +16,13 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 
 /**
- * Nocne sprzątanie wygasłych tokenów.
+ * Nocne sprzątanie wygasłych tokenów i porzuconych zgłoszeń rejestracji.
+ *
+ * Nie ma tu już kroku kasującego niepotwierdzone konta z tabeli users - po przeniesieniu
+ * poczekalni do pending_registrations wiersz w users powstaje wyłącznie jako konto
+ * potwierdzone, więc taki krok nie miałby czego szukać. Co więcej, byłby groźny: gdyby
+ * ktoś dołożył kiedyś zakładanie kont przez administratora z enabled=false, job po cichu
+ * kasowałby je po dobie.
  *
  * UWAGA na wdrożenie wieloinstancyjne: @Scheduled odpala się w każdej instancji osobno,
  * więc przy dwóch podach job wykona się dwa razy. Tutaj jest to nieszkodliwe (usuwanie
@@ -27,7 +34,8 @@ import java.time.LocalDateTime;
 @RequiredArgsConstructor
 public class ExpiredTokenCleanupJob {
 
-    private final VerificationTokenRepository verificationTokenRepository;
+    private final PendingRegistrationRepository pendingRegistrationRepository;
+    private final PasswordResetTokenRepository passwordResetTokenRepository;
     private final RefreshTokenRepository refreshTokenRepository;
 
     // Co noc o 3:00
@@ -36,15 +44,22 @@ public class ExpiredTokenCleanupJob {
     public void cleanupExpiredTokens() {
         LocalDateTime now = LocalDateTime.now();
 
-        // Tokeny weryfikacyjne: po wygaśnięciu i tak nie da się nimi potwierdzić konta.
-        verificationTokenRepository.deleteAllExpired(now);
+        // Porzucone zgłoszenia rejestracji: nikt nie kliknął linku w ciągu doby.
+        // Adresu nie blokowały (unikalność obowiązuje dopiero w users), ale tabela
+        // rosłaby bez końca, a przy ataku na endpoint rejestracji rosłaby szybko.
+        int removedRegistrations = pendingRegistrationRepository.deleteAllExpired(now);
+
+        // Tokeny resetu hasła: kasujemy też zużyte, bo po wygaśnięciu nie są już
+        // potrzebne nawet do komunikatu "link wykorzystany".
+        int removedResetTokens = passwordResetTokenRepository.deleteAllExpired(now);
 
         // Tokeny odświeżające: usuwamy też te zużyte przez rotację, bo po wygaśnięciu
         // nie niosą już żadnej informacji. Bez tego tabela rosłaby w nieskończoność,
         // a wyszukiwanie po token_hash z czasem by zwalniało.
         int removedRefreshTokens = refreshTokenRepository.deleteAllExpired(now);
 
-        log.info("Sprzątanie tokenów zakończone - usunięto {} wygasłych tokenów odświeżających",
-                removedRefreshTokens);
+        log.info("Sprzątanie zakończone - usunięto {} porzuconych zgłoszeń rejestracji, "
+                        + "{} tokenów resetu hasła i {} tokenów odświeżających",
+                removedRegistrations, removedResetTokens, removedRefreshTokens);
     }
 }

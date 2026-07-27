@@ -6,7 +6,10 @@ package com.example.robert.auth;
 
 
 import com.example.robert.auth.dto.ConfirmEmailRequest;
+import com.example.robert.auth.dto.CsrfTokenResponse;
+import com.example.robert.auth.dto.ForgotPasswordRequest;
 import com.example.robert.auth.dto.LoginRequest;
+import com.example.robert.auth.dto.ResetPasswordRequest;
 import com.example.robert.auth.dto.TokenPair;
 import com.example.robert.user.dto.UserRequestDTO;
 import com.example.robert.common.exception.JwtAuthenticationException;
@@ -19,6 +22,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.web.csrf.CsrfToken;
 import org.springframework.web.bind.annotation.*;
 import java.time.LocalDateTime;
 
@@ -48,14 +52,22 @@ public class AuthController {
                 .body(new SuccessMessage("Zalogowano pomyślnie", LocalDateTime.now()));
     }
 
+    /**
+     * 202, nie 201: w tym momencie nic jeszcze nie powstało. Zgłoszenie leży
+     * w pending_registrations i zamieni się w konto dopiero po potwierdzeniu adresu.
+     *
+     * Odpowiedź jest IDENTYCZNA dla adresu wolnego i już zarejestrowanego. Nie ma tu
+     * ścieżki zwracającej 409 - byłaby to wyrocznia pozwalająca odpytać, kto ma u nas
+     * konto. Właściciel istniejącego konta dowiaduje się o próbie mailem.
+     */
     @PostMapping("/register")
     public ResponseEntity<SuccessMessage> register(
             @Valid @RequestBody UserRequestDTO request) {
 
         authService.register(request);
 
-        return ResponseEntity.status(HttpStatus.CREATED)
-                .body(new SuccessMessage("Sprawdź swoją skrzynkę email, aby potwierdzić rejestrację", LocalDateTime.now()));
+        return ResponseEntity.status(HttpStatus.ACCEPTED)
+                .body(new SuccessMessage("Sprawdź swoją skrzynkę email, aby dokończyć rejestrację", LocalDateTime.now()));
     }
 
     @PostMapping("/confirm")
@@ -63,6 +75,48 @@ public class AuthController {
         authService.confirmEmail(request.token());
 
         return ResponseEntity.ok(new SuccessMessage("Email potwierdzony, możesz się zalogować", LocalDateTime.now()));
+    }
+
+    /**
+     * Ten sam komunikat dla adresu znanego i nieznanego - endpoint resetu hasła jest
+     * klasycznym miejscem wycieku listy użytkowników.
+     */
+    @PostMapping("/forgot-password")
+    public ResponseEntity<SuccessMessage> forgotPassword(
+            @Valid @RequestBody ForgotPasswordRequest request) {
+
+        authService.requestPasswordReset(request.email());
+
+        return ResponseEntity.ok(new SuccessMessage(
+                "Jeśli konto istnieje, link do ustawienia nowego hasła został wysłany",
+                LocalDateTime.now()));
+    }
+
+    @PostMapping("/reset-password")
+    public ResponseEntity<SuccessMessage> resetPassword(
+            @Valid @RequestBody ResetPasswordRequest request,
+            HttpServletResponse response) {
+
+        authService.resetPassword(request.token(), request.password());
+
+        // Ciasteczka czyścimy, bo reset unieważnił wszystkie sesje po stronie serwera.
+        // Zostawienie ich oznaczałoby, że przeglądarka dalej wysyła martwe tokeny
+        // i użytkownik dostaje 401 zamiast czystego ekranu logowania.
+        response.addHeader(HttpHeaders.SET_COOKIE, cookieService.clearAccessTokenCookie().toString());
+        response.addHeader(HttpHeaders.SET_COOKIE, cookieService.clearRefreshTokenCookie().toString());
+
+        return ResponseEntity.ok(new SuccessMessage(
+                "Hasło zmienione. Zaloguj się ponownie na wszystkich urządzeniach.",
+                LocalDateTime.now()));
+    }
+
+    /**
+     * Wydaje token CSRF frontendowi. Wołane raz, przy starcie aplikacji klienckiej,
+     * przed pierwszym żądaniem zmieniającym stan. Szczegóły: CsrfTokenResponse.
+     */
+    @GetMapping("/csrf")
+    public CsrfTokenResponse csrfToken(CsrfToken token) {
+        return new CsrfTokenResponse(token.getHeaderName(), token.getToken());
     }
 
     @PostMapping("/refresh")

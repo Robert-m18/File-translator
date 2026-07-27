@@ -96,26 +96,12 @@ public class JwtUtil {
         }
     }
 
-    /**
-     * Sprawdza czy token jest jeszcze ważny (nie wygasł)
+    /*
+     * Nie ma tu osobnej metody isTokenValid(). Sprawdzanie ważności "na boku" byłoby
+     * zbędnym drugim wywołaniem parsera: extractUsername() i tak weryfikuje podpis
+     * oraz datę wygaśnięcia, bo parseSignedClaims() rzuca ExpiredJwtException samo z siebie.
+     * Dwie metody robiące to samo różnymi ścieżkami to gwarancja, że kiedyś się rozjadą.
      */
-    public boolean isTokenValid(String token) {
-        try {
-            Date expiration = extractClaims(token).getExpiration();
-            boolean isValid = expiration.after(new Date());
-            log.debug("Token JWT walidacja: {}", isValid ? "OK" : "WYGASŁ");
-            return isValid;
-        } catch (ExpiredJwtException ex) {
-            log.warn("Token JWT wygasł");
-            throw new JwtAuthenticationException("Token wygasł", "EXPIRED_TOKEN", ex);
-        } catch (JwtException ex) {
-            log.warn("Nieprawidłowy token JWT: {}", ex.getMessage());
-            throw new JwtAuthenticationException("Nieprawidłowy token", "INVALID_TOKEN", ex);
-        } catch (Exception ex) {
-            log.error("Błąd przy walidacji tokena: ", ex);
-            throw new JwtAuthenticationException("Błąd przy walidacji", "VALIDATION_ERROR", ex);
-        }
-    }
 
     /**
      * Pomocnicza - parsuje token i zwraca payload

@@ -13,3 +13,5 @@ logs/
 .github/
 docker-compose.yml
 Dockerfile
+.claude
+CLAUDE.md

@@ -115,6 +115,17 @@ public class RefreshTokenService {
         // a klient i tak dostanie polecenie skasowania ciasteczek.
     }
 
+    /**
+     * Unieważnia wszystkie sesje użytkownika na wszystkich urządzeniach.
+     * Używane przy resecie hasła - patrz RefreshTokenRepository.revokeAllForUser.
+     *
+     * @return liczba unieważnionych tokenów
+     */
+    @Transactional
+    public int revokeAllSessions(Long userId) {
+        return refreshTokenRepository.revokeAllForUser(userId, LocalDateTime.now());
+    }
+
     private RefreshToken loadAndValidate(String rawToken) {
         RefreshToken token = refreshTokenRepository.findByTokenHash(TokenHasher.sha256Hex(rawToken))
                 .orElseThrow(() -> {

@@ -9,17 +9,20 @@ import jakarta.mail.internet.MimeMessage;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.mail.MailException;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.MimeMessageHelper;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.thymeleaf.TemplateEngine;
 import org.thymeleaf.context.Context;
 
 /**
- * Wysyłka maili transakcyjnych (na razie: potwierdzenie rejestracji).
- * @Async - request rejestracji nie czeka na odpowiedź serwera SMTP.
+ * Wysyłka maili transakcyjnych: potwierdzenie rejestracji, reset hasła oraz
+ * powiadomienie o próbie rejestracji na istniejący adres.
+ *
+ * Ta klasa tylko rozmawia z SMTP i nie podejmuje żadnych decyzji o ponawianiu.
+ * Kto, kiedy i ile razy próbuje wysłać - o tym decyduje OutboxPublisher.
+ * Wołanie jej wprost z obsługi żądania HTTP byłoby błędem: żądanie czekałoby na SMTP,
+ * a nieudana wysyłka nie zostawiłaby po sobie śladu. Maile zamawia się przez MailOutbox.
  */
 @Slf4j
 @Service
@@ -41,36 +44,75 @@ public class EmailService {
         this.mailFrom = mailFrom;
     }
 
-    @Async
     public void sendVerificationEmail(String toEmail, String name, String token) {
-        String confirmationLink = frontendUrl + "/confirm-email?token=" + token;
-
         Context context = new Context();
         context.setVariable("name", name);
-        context.setVariable("confirmationLink", confirmationLink);
-        // Template is located at src/main/resources/templates/email.html
-        // Use template name "email" so Thymeleaf resolves email.html
-        String htmlBody = templateEngine.process("email", context);
+        context.setVariable("confirmationLink", frontendUrl + "/confirm-email?token=" + token);
+
+        send(toEmail, "Potwierdź rejestrację", "email", context, "weryfikacyjnego");
+    }
+
+    public void sendPasswordResetEmail(String toEmail, String name, String token) {
+        Context context = new Context();
+        context.setVariable("name", name);
+        context.setVariable("resetLink", frontendUrl + "/reset-password?token=" + token);
+
+        send(toEmail, "Ustaw nowe hasło", "password-reset", context, "z resetem hasła");
+    }
+
+    /**
+     * Powiadomienie dla właściciela skrzynki, że ktoś próbował zarejestrować konto
+     * na jego adres. Nie niesie żadnego tokenu - nie ma nic do aktywowania.
+     */
+    public void sendAccountExistsEmail(String toEmail) {
+        Context context = new Context();
+        context.setVariable("forgotPasswordLink", frontendUrl + "/forgot-password");
+
+        send(toEmail, "Próba rejestracji na Twój adres", "account-exists", context,
+                "o istniejącym koncie");
+    }
+
+    /**
+     * Wspólna wysyłka. Synchroniczna i RZUCAJĄCA wyjątek przy porażce.
+     *
+     * Jedno i drugie jest tu istotne. Wcześniej metody były @Async, a wyjątek był łapany
+     * i logowany - bo nie było komu go zgłosić: transakcja rejestracji była już
+     * zatwierdzona, a informacja o nieudanej wysyłce nigdzie nie trafiała.
+     *
+     * Teraz wołającym jest OutboxPublisher, który MUSI znać wynik, żeby zapisać status
+     * wiadomości i zaplanować ponowienie. Przełknięcie wyjątku tutaj oznaczałoby oznaczanie
+     * jako wysłane maili, które nigdy nie wyszły - czyli dokładne odwrócenie sensu skrzynki
+     * nadawczej. Wątek również nie jest już potrzebny: publisher i tak działa poza wątkiem
+     * obsługującym żądanie HTTP.
+     */
+    private void send(String toEmail, String subject, String template, Context context, String opis) {
+        String htmlBody = templateEngine.process(template, context);
 
         try {
             MimeMessage message = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(message, "utf-8");
             helper.setTo(toEmail);
             helper.setFrom(mailFrom);
-            helper.setSubject("Potwierdź rejestrację");
+            helper.setSubject(subject);
             helper.setText(htmlBody, true);
 
             mailSender.send(message);
-            log.info("Wysłano mail weryfikacyjny");
-        } catch (MessagingException | MailException e) {
-            // MailException jest kluczowa: mailSender.send() rzuca właśnie ją (niekontrolowaną)
-            // przy niedostępnym serwerze SMTP. Łapanie samego MessagingException nie obejmowało
-            // najczęstszego przypadku awarii - wyjątek uciekał do wątku puli @Async.
-            //
-            // Świadomie nie rzucamy dalej: błąd wysyłki maila nie może wywrócić rejestracji,
-            // która została już zatwierdzona (@Async leci po commicie transakcji).
-            // Docelowo: retry (Spring Retry) + tabela outbox ze statusem wysyłki.
-            log.error("Nie udało się wysłać maila weryfikacyjnego", e);
+            log.debug("Wysłano mail {}", opis);
+
+        } catch (MessagingException e) {
+            // MessagingException jest kontrolowany, a nie chcemy nim zaśmiecać sygnatur
+            // w górę - publisher łapie po prostu Exception i zapisuje powód porażki.
+            throw new MailDeliveryException("Nie udało się zbudować maila " + opis, e);
+        }
+        // MailException (niekontrolowany) leci wyżej sam. To ją rzuca mailSender.send()
+        // przy niedostępnym albo odrzucającym serwerze SMTP - czyli w najczęstszym
+        // przypadku awarii.
+    }
+
+    /** Porażka wysyłki. Łapana przez OutboxPublisher, który decyduje o ponowieniu. */
+    public static class MailDeliveryException extends RuntimeException {
+        public MailDeliveryException(String message, Throwable cause) {
+            super(message, cause);
         }
     }
 }

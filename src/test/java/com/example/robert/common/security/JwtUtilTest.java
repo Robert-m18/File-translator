@@ -45,21 +45,16 @@ class JwtUtilTest {
     }
 
     @Test
-    void isTokenValid_shouldReturnTrueForFreshToken() {
-        String token = jwtUtil.generateToken("adrian");
-
-        assertThat(jwtUtil.isTokenValid(token)).isTrue();
-    }
-
-    @Test
-    void isTokenValid_shouldThrowExpiredException_whenTokenExpired() {
+    void extractUsername_shouldThrowExpiredException_whenTokenExpired() {
         // osobna instancja z ujemnym czasem ważności - token wygasły od razu po utworzeniu
         JwtUtil expiredJwtUtil = new JwtUtil(TEST_SECRET, -1000L, 604_800_000L);
         String expiredToken = expiredJwtUtil.generateToken("adrian");
 
+        // Wygaśnięcie wykrywa sam parser, więc sprawdzamy je na tej metodzie,
+        // której faktycznie używa JwtFilter - nie na osobnym walidatorze.
         JwtAuthenticationException ex = assertThrows(
                 JwtAuthenticationException.class,
-                () -> expiredJwtUtil.isTokenValid(expiredToken)
+                () -> expiredJwtUtil.extractUsername(expiredToken)
         );
         assertThat(ex.getTokenError()).isEqualTo("EXPIRED_TOKEN");
     }

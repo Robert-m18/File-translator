@@ -18,5 +18,8 @@
     <!-- Każda zmiana schematu = nowy plik dołączony poniżej. Nigdy nie edytujemy już wykonanych changesetów. -->
     <include file="db/changelog/changes/0001-init-schema.xml"/>
     <include file="db/changelog/changes/0002-refresh-tokens-and-account-lockout.xml"/>
+    <include file="db/changelog/changes/0003-unconfirmed-account-cleanup.xml"/>
+    <include file="db/changelog/changes/0004-pending-registrations-and-password-reset.xml"/>
+    <include file="db/changelog/changes/0005-mail-outbox.xml"/>
 
 </databaseChangeLog>

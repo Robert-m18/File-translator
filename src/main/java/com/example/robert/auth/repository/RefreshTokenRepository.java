@@ -27,6 +27,17 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, Long
     @Query("update RefreshToken t set t.revokedAt = :now where t.familyId = :familyId and t.revokedAt is null")
     int revokeFamily(@Param("familyId") String familyId, @Param("now") LocalDateTime now);
 
+    /**
+     * Unieważnia WSZYSTKIE sesje użytkownika, niezależnie od rodziny i urządzenia.
+     *
+     * Wołane po resecie hasła. Jeśli powodem resetu było przejęcie konta, to napastnik
+     * ma ważny token odświeżający - bez tego kroku zmiana hasła nic mu nie odbiera
+     * i zostaje w koncie do wygaśnięcia tokenu, czyli przez tydzień.
+     */
+    @Modifying
+    @Query("update RefreshToken t set t.revokedAt = :now where t.user.id = :userId and t.revokedAt is null")
+    int revokeAllForUser(@Param("userId") Long userId, @Param("now") LocalDateTime now);
+
     /** Sprzątanie po wygasłych tokenach - i tak nie da się ich już użyć. */
     @Modifying
     @Query("delete from RefreshToken t where t.expiresAt < :now")

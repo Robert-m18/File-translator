@@ -11,6 +11,7 @@ import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -49,6 +50,7 @@ class RateLimitTest {
         // ale ważne jest, że w ogóle docierają do logiki uwierzytelniania.
         for (int i = 0; i < 3; i++) {
             int status = mockMvc.perform(post("/auth/login")
+                            .with(csrf())
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(BODY))
                     .andReturn().getResponse().getStatus();
@@ -58,6 +60,7 @@ class RateLimitTest {
         // Czwarte żądanie zostaje odcięte PRZED sprawdzeniem hasła - to jest cel limitera:
         // atak siłowy nie może obciążać bazy ani kosztownego porównania hasha BCrypt.
         mockMvc.perform(post("/auth/login")
+                        .with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(BODY))
                 .andExpect(status().isTooManyRequests())
@@ -75,6 +78,7 @@ class RateLimitTest {
         // Sprawdza, że filtr nie limituje przypadkiem wszystkiego jak leci.
         for (int i = 0; i < 6; i++) {
             mockMvc.perform(post("/auth/register")
+                            .with(csrf())
                             .contentType(MediaType.APPLICATION_JSON)
                             .content("""
                                     {"name":"X","email":"zly-email","password":"x"}

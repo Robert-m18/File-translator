@@ -34,7 +34,14 @@ app:
     url: "${FRONTEND_URL}"
   cookie:
     secure: true
-    same-site: Strict
+    # None, żeby ciasteczka docierały do API stojącego pod inną domeną niż SPA.
+    # Strict blokowałby je całkowicie w takim wdrożeniu - i to bez żadnego błędu
+    # po stronie serwera, więc objawem byłoby po prostu "logowanie nie działa".
+    #
+    # None WYMAGA secure: true (przeglądarka odrzuca None bez Secure) i wymaga
+    # ochrony CSRF, bo SameSite przestaje być jakąkolwiek barierą. Token CSRF jest
+    # włączony w SecurityConfig - te dwie rzeczy zmienia się wyłącznie razem.
+    same-site: None
 
 management:
   endpoints:

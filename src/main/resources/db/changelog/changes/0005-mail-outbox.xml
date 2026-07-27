@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="0005-01-create-outbox-messages" author="robert">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <tableExists tableName="outbox_messages"/>
+            </not>
+        </preConditions>
+
+        <!--
+            Skrzynka nadawcza maili (wzorzec transactional outbox).
+
+            Problem, który rozwiązuje: zapis do bazy i wysyłka na zewnątrz nie mogą być
+            objęte jedną transakcją, bo SMTP o transakcjach nic nie wie. Wysyłka przed
+            commitem oznacza link do konta, które nie powstało; wysyłka po commicie oznacza
+            konto bez maila, jeśli cokolwiek padnie w międzyczasie. To jest dual write.
+
+            Rozwiązanie: transakcją obejmujemy nie wysyłkę, a ZAMIAR wysyłki. Wiersz w tej
+            tabeli powstaje w tej samej transakcji co pending_registrations, więc commituje
+            się razem z nią albo wcale. Osobny proces (OutboxPublisher) czyta wiersze
+            i wysyła je później.
+
+            Gwarancja to at-least-once, nie exactly-once: jeśli proces padnie po udanej
+            wysyłce, a przed zapisem statusu, mail poleci drugi raz. Przy mailu
+            weryfikacyjnym to nieszkodliwe (ten sam link dwa razy w skrzynce); przy operacji
+            z realnym skutkiem trzeba by dodać deduplikację po stronie odbiorcy.
+        -->
+        <createTable tableName="outbox_messages">
+            <column name="id" type="BIGINT" autoIncrement="true">
+                <constraints primaryKey="true" primaryKeyName="pk_outbox_messages" nullable="false"/>
+            </column>
+            <column name="recipient" type="VARCHAR(255)">
+                <constraints nullable="false"/>
+            </column>
+            <!-- Nazwa szablonu jako tekst enuma - patrz MailTemplate -->
+            <column name="template" type="VARCHAR(40)">
+                <constraints nullable="false"/>
+            </column>
+            <!-- Zmienne szablonu jako JSON. Świadomie NIE trzymamy tu gotowej treści maila:
+                 zmiana szablonu ma dotyczyć też wiadomości jeszcze niewysłanych. -->
+            <column name="payload" type="VARCHAR(1000)">
+                <constraints nullable="false"/>
+            </column>
+            <!-- NEW = do wysłania, SENT = wysłane, FAILED = poddaliśmy się po maksymalnej
+                 liczbie prób. Brak stanu "w trakcie wysyłki" jest zamierzony - patrz
+                 OutboxPublisher, tam wyjaśnienie, dlaczego rezerwacja idzie przez
+                 przesunięcie next_retry_at, a nie przez osobny status. -->
+            <column name="status" type="VARCHAR(20)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="attempts" type="INT" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <!-- Kiedy najwcześniej wolno wziąć ten wiersz do wysyłki. Służy dwóm rzeczom:
+                 opóźnieniu przy backoffie i rezerwacji wiersza przez instancję. -->
+            <column name="next_retry_at" type="${type.datetime}">
+                <constraints nullable="false"/>
+            </column>
+            <!-- Powód ostatniej porażki - bez tego "FAILED" nie mówi nic poza tym, że padło -->
+            <column name="last_error" type="VARCHAR(500)"/>
+            <column name="created_at" type="${type.datetime}">
+                <constraints nullable="false"/>
+            </column>
+            <column name="sent_at" type="${type.datetime}"/>
+        </createTable>
+
+        <!-- Pod jedyne gorące zapytanie: wiersze gotowe do wysłania -->
+        <createIndex indexName="idx_outbox_messages_status_next_retry" tableName="outbox_messages">
+            <column name="status"/>
+            <column name="next_retry_at"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

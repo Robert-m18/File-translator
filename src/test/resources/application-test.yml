@@ -55,6 +55,17 @@ app:
     enabled: false
     store: memory
     policies: []
+  outbox:
+    # Wyłączone, bo publisher odpalający się w tle zabierałby wiersze, które testy chcą
+    # sprawdzić - wynik zależałby od tego, co zdąży się wykonać. Testy wołają
+    # OutboxPublisher.publishBatch() wprost.
+    enabled: false
+    poll-interval: 1h
+    batch-size: 50
+    # Niżej niż na produkcji, żeby test wyczerpania prób nie potrzebował pięciu iteracji
+    max-attempts: 3
+    retry-backoff: 1s
+    claim-timeout: 2m
   account-lock:
     enabled: true
     max-attempts: 3

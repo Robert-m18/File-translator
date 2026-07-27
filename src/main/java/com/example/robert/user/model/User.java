@@ -6,6 +6,7 @@ package com.example.robert.user.model;
 
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.CreationTimestamp;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.userdetails.UserDetails;
@@ -58,6 +59,18 @@ public class User implements UserDetails {
     /** Do kiedy konto jest zablokowane. NULL = odblokowane. */
     @Column(name = "locked_until")
     private LocalDateTime lockedUntil;
+
+    /**
+     * Data założenia konta, ustawiana przez Hibernate przy pierwszym zapisie.
+     *
+     * Nie jest tu dla statystyk - to po niej ExpiredTokenCleanupJob poznaje konta
+     * porzucone na etapie rejestracji. Bez niej niepotwierdzony wiersz siedziałby
+     * w bazie bez końca, trzymając unikalny adres email i blokując rejestrację
+     * prawdziwemu właścicielowi skrzynki.
+     */
+    @CreationTimestamp
+    @Column(name = "created_at", nullable = false, updatable = false)
+    private LocalDateTime createdAt;
 
     @Override
     public Collection<? extends GrantedAuthority> getAuthorities() {

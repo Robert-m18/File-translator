@@ -4,49 +4,58 @@
  */
 package com.example.robert.auth;
 
-import com.example.robert.user.UserService;
 import com.example.robert.auth.dto.TokenPair;
-import com.example.robert.user.dto.UserRequestDTO;
-import com.example.robert.common.security.JwtUtil;
-import com.example.robert.auth.UserRegisteredEvent;
-import com.example.robert.common.exception.EmailAlreadyExistException;
+import com.example.robert.auth.model.PasswordResetToken;
+import com.example.robert.auth.model.PendingRegistration;
+import com.example.robert.auth.repository.PasswordResetTokenRepository;
+import com.example.robert.auth.repository.PendingRegistrationRepository;
 import com.example.robert.common.exception.InvalidTokenException;
 import com.example.robert.common.exception.JwtAuthenticationException;
 import com.example.robert.common.exception.TokenExpiredException;
+import com.example.robert.common.security.JwtUtil;
+import com.example.robert.common.security.TokenHasher;
+import com.example.robert.notification.MailOutbox;
+import com.example.robert.user.UserService;
+import com.example.robert.user.dto.UserRequestDTO;
 import com.example.robert.user.model.User;
-import com.example.robert.auth.model.VerificationToken;
-import com.example.robert.auth.repository.VerificationTokenRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
- * Service do obsługi autentykacji - login i rejestracja
+ * Service do obsługi autentykacji - login, rejestracja, reset hasła.
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class AuthService {
 
-    private static final long TOKEN_VALIDITY_HOURS = 24;
+    private static final long REGISTRATION_VALIDITY_HOURS = 24;
+
+    /**
+     * Link do resetu hasła żyje krótko - godzinę, nie dobę jak link rejestracyjny.
+     * Różnica jest celowa: token resetu jest pełnym kluczem do istniejącego konta,
+     * a token rejestracyjny tylko aktywuje konto, którego jeszcze nie ma.
+     */
+    private static final long PASSWORD_RESET_VALIDITY_HOURS = 1;
 
     private final AuthenticationManager authenticationManager;
     private final JwtUtil jwtUtil;
     private final UserService userService;
-    private final VerificationTokenRepository verificationTokenRepository;
+    private final PasswordEncoder passwordEncoder;
+    private final PendingRegistrationRepository pendingRegistrationRepository;
+    private final PasswordResetTokenRepository passwordResetTokenRepository;
     private final RefreshTokenService refreshTokenService;
-    private final ApplicationEventPublisher eventPublisher;
+    private final MailOutbox mailOutbox;
 
     @Transactional
     public TokenPair login(String email, String password) {
@@ -70,64 +79,163 @@ public class AuthService {
         return new TokenPair(accessToken, refreshToken);
     }
 
+    /**
+     * Przyjmuje zgłoszenie rejestracji. Konto powstaje dopiero przy potwierdzeniu adresu.
+     *
+     * Metoda nigdy nie sygnalizuje, czy adres jest już zarejestrowany - odpowiedź jest
+     * identyczna w każdym przypadku. Poprzednia wersja rzucała tu 409, co zamieniało
+     * endpoint w narzędzie do sprawdzania, kto ma u nas konto.
+     */
     @Transactional
     public void register(UserRequestDTO dto) {
-        log.info("Próba rejestracji nowego użytkownika");
+        log.info("Przyjęto zgłoszenie rejestracji");
 
-        if (userService.userExistsByEmail(dto.email())) {
-            log.warn("Email już istnieje w bazie");
-            throw new EmailAlreadyExistException("User with this email already exists!");
+        if (userService.existsByEmail(dto.email())) {
+            /*
+             * Konto już istnieje, więc nie zakładamy zgłoszenia. Nie odpowiadamy też
+             * błędem - informację dostaje właściciel skrzynki, a nie ten, kto wysłał
+             * żądanie. Jeśli to pomyłka prawowitego użytkownika, mail podpowie mu
+             * zalogowanie albo reset hasła; jeśli ktoś sonduje adresy, nie dowie się nic.
+             */
+            log.info("Zgłoszenie na adres z istniejącym kontem - wysyłamy powiadomienie zamiast zakładać wpis");
+            mailOutbox.enqueueAccountExists(dto.email());
+            return;
         }
 
-        User savedUser = userService.saveUser(dto); // enabled=false w środku
-
+        /*
+         * Każde zgłoszenie to NOWY wiersz - nie nadpisujemy istniejących zgłoszeń na ten
+         * sam adres. To jest cała istota tego modelu: gdyby zgłoszenia się nadpisywały,
+         * obca osoba mogłaby podmienić hash hasła w trwającej rejestracji, a ofiara,
+         * klikając najnowszy link ze swojej skrzynki, aktywowałaby konto z cudzym hasłem.
+         * Tutaj potwierdzenie aktywuje dokładnie to zgłoszenie, którego token przyszedł
+         * w klikniętym linku, więc obce zgłoszenia leżą obok i wygasają nieużyte.
+         */
         String rawToken = UUID.randomUUID().toString();
-        String tokenHash = hashToken(rawToken);
-        VerificationToken verificationToken = new VerificationToken(
-                tokenHash, savedUser, LocalDateTime.now().plusHours(TOKEN_VALIDITY_HOURS)
-        );
-        verificationTokenRepository.save(verificationToken);
+        LocalDateTime now = LocalDateTime.now();
 
-        // Event odpala się DOPIERO po commicie transakcji (patrz UserRegisteredEventListener).
-        // Gdyby coś wywaliło wyjątek wyżej i transakcja się wycofała - mail nigdy nie poleci.
-        eventPublisher.publishEvent(new UserRegisteredEvent(
-                savedUser.getId(), savedUser.getEmail(), savedUser.getName(), rawToken
+        pendingRegistrationRepository.save(new PendingRegistration(
+                dto.email(),
+                dto.name(),
+                passwordEncoder.encode(dto.password()),
+                TokenHasher.sha256Hex(rawToken),
+                now,
+                now.plusHours(REGISTRATION_VALIDITY_HOURS)
         ));
 
-        log.info("Użytkownik zarejestrowany (id={}), czeka na potwierdzenie adresu email", savedUser.getId());
+        // Zamówienie maila trafia do skrzynki nadawczej w TEJ SAMEJ transakcji co zgłoszenie.
+        // Gdyby coś wywaliło wyjątek wyżej, wycofa się jedno i drugie: nie wyślemy linku
+        // do rejestracji, która nie powstała. A gdy transakcja przejdzie, zamówienie jest
+        // już trwałe - awaria SMTP albo restart poda nie kasują go, tylko odkładają.
+        mailOutbox.enqueueVerification(dto.email(), dto.name(), rawToken);
     }
 
+    /**
+     * Potwierdza adres i zakłada konto z danych zgłoszenia.
+     */
     @Transactional
     public void confirmEmail(String rawToken) {
-        String hash = hashToken(rawToken);
-        VerificationToken token = verificationTokenRepository.findByTokenHash(hash)
+        PendingRegistration pending = pendingRegistrationRepository
+                .findByTokenHash(TokenHasher.sha256Hex(rawToken))
                 .orElseThrow(() -> new InvalidTokenException("Nieprawidłowy token potwierdzający"));
 
+        if (pending.isExpired()) {
+            throw new TokenExpiredException("Token wygasł - zarejestruj się ponownie");
+        }
+
+        if (userService.existsByEmail(pending.getEmail())) {
+            /*
+             * Konto powstało już z innego zgłoszenia na ten adres (np. użytkownik
+             * rejestrował się dwa razy i kliknął oba linki). Nie ruszamy hasła istniejącego
+             * konta - nadpisanie go danymi ze starszego zgłoszenia byłoby cichą zmianą
+             * hasła. Kasujemy tylko zbędne zgłoszenie.
+             */
+            pendingRegistrationRepository.deleteAllByEmail(pending.getEmail());
+            log.info("Potwierdzenie dla adresu, na którym konto już istnieje - zgłoszenie usunięte");
+            return;
+        }
+
+        // Hasło jest już zahashowane w poczekalni - przenosimy hash, nie kodujemy po raz drugi.
+        User created = userService.createConfirmedUser(
+                pending.getEmail(), pending.getName(), pending.getPasswordHash());
+
+        // Kasujemy WSZYSTKIE zgłoszenia na ten adres, nie tylko wykorzystane. Pozostałe
+        // (także obce) straciły sens, bo adres jest od teraz zajęty przez istniejące konto.
+        pendingRegistrationRepository.deleteAllByEmail(pending.getEmail());
+
+        log.info("Email potwierdzony, konto utworzone (id={})", created.getId());
+    }
+
+    /**
+     * Rozpoczyna reset hasła.
+     *
+     * Tak jak rejestracja: odpowiedź jest identyczna dla adresu znanego i nieznanego.
+     * Endpoint resetu hasła jest klasycznym miejscem wycieku listy użytkowników.
+     */
+    @Transactional
+    public void requestPasswordReset(String email) {
+        Optional<User> found = userService.findEntityByEmail(email);
+
+        if (found.isEmpty()) {
+            log.info("Żądanie resetu hasła dla nieznanego adresu - pomijamy");
+            return;
+        }
+
+        User user = found.get();
+        LocalDateTime now = LocalDateTime.now();
+
+        // W obiegu ma być najwyżej jeden żywy link. Bez tego seria żądań zostawia stos
+        // ważnych tokenów, a każdy z nich jest pełnym kluczem do konta.
+        passwordResetTokenRepository.invalidateAllForUser(user.getId(), now);
+
+        String rawToken = UUID.randomUUID().toString();
+        passwordResetTokenRepository.save(new PasswordResetToken(
+                TokenHasher.sha256Hex(rawToken),
+                user,
+                now,
+                now.plusHours(PASSWORD_RESET_VALIDITY_HOURS)
+        ));
+
+        mailOutbox.enqueuePasswordReset(user.getEmail(), user.getName(), rawToken);
+
+        log.info("Wysłano link do resetu hasła (id={})", user.getId());
+    }
+
+    /**
+     * Ustawia nowe hasło na podstawie jednorazowego tokenu.
+     */
+    @Transactional
+    public void resetPassword(String rawToken, String newPassword) {
+        PasswordResetToken token = passwordResetTokenRepository
+                .findByTokenHash(TokenHasher.sha256Hex(rawToken))
+                .orElseThrow(() -> new InvalidTokenException("Nieprawidłowy link do resetu hasła"));
+
+        if (token.isUsed()) {
+            // Osobny komunikat od "nieprawidłowy": użytkownik wie, że reset się udał,
+            // i nie próbuje w panice kolejnych rzeczy.
+            throw new InvalidTokenException("Ten link został już wykorzystany");
+        }
+
         if (token.isExpired()) {
-            throw new TokenExpiredException("Token wygasł, poproś o nowy link");
+            throw new TokenExpiredException("Link wygasł - poproś o nowy");
         }
 
         User user = token.getUser();
-        user.setEnabled(true);
-        // user jest zarządzany przez Hibernate (dirty checking) - nie trzeba wołać save()
+        userService.updatePassword(user, passwordEncoder.encode(newPassword));
+        token.setUsedAt(LocalDateTime.now()); // encja zarządzana - dirty checking zapisze zmianę
 
-        verificationTokenRepository.delete(token);
-        log.info("Email potwierdzony dla użytkownika id={}", user.getId());
-    }
+        /*
+         * Reset hasła MUSI zerwać istniejące sesje. Jeśli powodem resetu było przejęcie
+         * konta, to napastnik ma ważny token odświeżający - bez tego kroku zmiana hasła
+         * niczego mu nie odbiera i zostaje w koncie na kolejne 7 dni.
+         */
+        int revoked = refreshTokenService.revokeAllSessions(user.getId());
 
-    private String hashToken(String rawToken) {
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            byte[] hashed = digest.digest(rawToken.getBytes(StandardCharsets.UTF_8));
-            StringBuilder sb = new StringBuilder();
-            for (byte b : hashed) {
-                sb.append(String.format("%02x", b));
-            }
-            return sb.toString();
-        } catch (NoSuchAlgorithmException e) {
-            // should never happen - SHA-256 is available
-            throw new RuntimeException(e);
-        }
+        // Zerujemy też blokadę: użytkownik, który zapomniał hasła, zwykle najpierw
+        // zdążył je pomylić kilka razy i zastałby konto zablokowane zaraz po resecie.
+        userService.clearLoginFailures(user.getEmail());
+
+        log.info("Hasło zmienione (id={}), unieważniono {} token(ów) odświeżających",
+                user.getId(), revoked);
     }
 
     @Transactional

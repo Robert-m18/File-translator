@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="0003-01-add-users-created-at" author="robert">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <columnExists tableName="users" columnName="created_at"/>
+            </not>
+        </preConditions>
+
+        <!--
+            Data założenia konta. Potrzebna nocnemu sprzątaniu, żeby odróżnić konto
+            zarejestrowane przed chwilą (czeka na kliknięcie w link) od porzuconego
+            sprzed doby. Bez tej kolumny niepotwierdzone wiersze zostawały w bazie
+            na zawsze i blokowały swój adres email.
+
+            Kolumna powstaje jako NULL-owalna wyłącznie po to, żeby dało się uzupełnić
+            istniejące wiersze - zaraz potem dostaje NOT NULL.
+        -->
+        <addColumn tableName="users">
+            <column name="created_at" type="${type.datetime}"/>
+        </addColumn>
+
+        <!-- Konta sprzed tej migracji: nie znamy ich prawdziwej daty, więc bierzemy "teraz".
+             Wszystkie są już potwierdzone albo i tak zostaną wychwycone przy kolejnym cyklu. -->
+        <update tableName="users">
+            <column name="created_at" valueComputed="CURRENT_TIMESTAMP"/>
+            <where>created_at IS NULL</where>
+        </update>
+
+        <addNotNullConstraint tableName="users"
+                              columnName="created_at"
+                              columnDataType="${type.datetime}"/>
+
+        <!-- Pod zapytanie joba czyszczącego: WHERE enabled = false AND created_at &lt; ? -->
+        <createIndex indexName="idx_users_enabled_created_at" tableName="users">
+            <column name="enabled"/>
+            <column name="created_at"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

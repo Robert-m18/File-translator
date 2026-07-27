@@ -19,6 +19,7 @@ import org.springframework.test.web.servlet.MvcResult;
 import java.util.Arrays;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -68,6 +69,7 @@ class SessionLifecycleTest {
                 """.formatted(EMAIL, PASSWORD);
 
         return mockMvc.perform(post("/auth/login")
+                        .with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isOk())
@@ -105,7 +107,7 @@ class SessionLifecycleTest {
     void refresh_shouldRotateTokens() throws Exception {
         Cookie originalRefresh = cookie(login(), "refreshToken");
 
-        MvcResult refreshed = mockMvc.perform(post("/auth/refresh").cookie(originalRefresh))
+        MvcResult refreshed = mockMvc.perform(post("/auth/refresh").with(csrf()).cookie(originalRefresh))
                 .andExpect(status().isOk())
                 .andReturn();
 
@@ -119,20 +121,20 @@ class SessionLifecycleTest {
         Cookie stolenToken = cookie(login(), "refreshToken");
 
         // Prawowity użytkownik odświeża sesję - jego token zostaje zużyty
-        MvcResult refreshed = mockMvc.perform(post("/auth/refresh").cookie(stolenToken))
+        MvcResult refreshed = mockMvc.perform(post("/auth/refresh").with(csrf()).cookie(stolenToken))
                 .andExpect(status().isOk())
                 .andReturn();
         Cookie currentToken = cookie(refreshed, "refreshToken");
 
         // Napastnik próbuje użyć wcześniej przechwyconej kopii
-        mockMvc.perform(post("/auth/refresh").cookie(stolenToken))
+        mockMvc.perform(post("/auth/refresh").with(csrf()).cookie(stolenToken))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.code").value("REFRESH_TOKEN_REUSED"));
 
         // Skutek uboczny jest zamierzony: pada cała rodzina, więc token, który
         // przed chwilą był ważny, też przestaje działać. Nie da się rozstrzygnąć,
         // która ze stron jest prawowitym użytkownikiem, więc obie muszą zalogować się ponownie.
-        mockMvc.perform(post("/auth/refresh").cookie(currentToken))
+        mockMvc.perform(post("/auth/refresh").with(csrf()).cookie(currentToken))
                 .andExpect(status().isUnauthorized());
     }
 
@@ -141,7 +143,7 @@ class SessionLifecycleTest {
     void refreshWithoutCookie_shouldReturnProblemDetail() throws Exception {
         // Puste ciało 401 wywracało front na response.json(). Każdy błąd API,
         // bez wyjątku, musi mieć ten sam kształt.
-        mockMvc.perform(post("/auth/refresh"))
+        mockMvc.perform(post("/auth/refresh").with(csrf()))
                 .andExpect(status().isUnauthorized())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON))
                 .andExpect(jsonPath("$.code").value("REFRESH_TOKEN_MISSING"))
@@ -153,12 +155,12 @@ class SessionLifecycleTest {
     void logout_shouldInvalidateRefreshToken() throws Exception {
         Cookie refresh = cookie(login(), "refreshToken");
 
-        mockMvc.perform(post("/auth/logout").cookie(refresh))
+        mockMvc.perform(post("/auth/logout").with(csrf()).cookie(refresh))
                 .andExpect(status().isOk());
 
         // Sedno: nawet mając kopię ciasteczka sprzed wylogowania, nie da się wznowić sesji.
         // Przed dodaniem stanu po stronie serwera taki token działałby jeszcze 7 dni.
-        mockMvc.perform(post("/auth/refresh").cookie(refresh))
+        mockMvc.perform(post("/auth/refresh").with(csrf()).cookie(refresh))
                 .andExpect(status().isUnauthorized());
     }
 }

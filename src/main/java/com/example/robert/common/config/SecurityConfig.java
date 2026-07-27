@@ -4,6 +4,7 @@
  */
 package com.example.robert.common.config;
 
+import com.example.robert.common.security.CookieProperties;
 import com.example.robert.common.security.JwtFilter;
 import com.example.robert.common.security.JwtUtil;
 import com.example.robert.common.observability.TraceIdFilter;
@@ -26,6 +27,9 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
+import org.springframework.security.web.csrf.CsrfTokenRepository;
+import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
@@ -52,6 +56,7 @@ public class SecurityConfig {
 
     private final RestAuthenticationEntryPoint authenticationEntryPoint;
     private final RestAccessDeniedHandler accessDeniedHandler;
+    private final CookieProperties cookieProperties;
 
     @Value("${app.frontend.url}")
     private String frontendOrigins;
@@ -67,15 +72,47 @@ public class SecurityConfig {
         return new JwtFilter(jwtUtil, userDetailsService, problemWriter);
     }
 
+    /**
+     * Ochrona CSRF wariantem "double submit cookie", dostrojonym pod frontend
+     * na innej domenie niż API.
+     *
+     * Dlaczego jest włączona: na produkcji ciasteczka lecą z SameSite=None, bo inaczej
+     * przeglądarka w ogóle nie wysłałaby ich do API stojącego pod inną domeną niż SPA.
+     * Ale SameSite był JEDYNĄ ochroną przed CSRF - poluzowanie go do None bez włączenia
+     * tokenu oznaczałoby, że dowolna strona może wykonać żądanie zmieniające stan
+     * na ciasteczkach ofiary. Jedno bez drugiego nie ma sensu.
+     *
+     * Ciasteczko XSRF-TOKEN zostaje httpOnly. To nie przeoczenie: skoro frontend jest
+     * na innej domenie, jego JavaScript i tak nie odczytałby ciasteczka API, więc
+     * klasyczny wariant z withHttpOnlyFalse() nic by nie dał. Frontend pobiera wartość
+     * tokenu z GET /auth/csrf, trzyma ją w pamięci i odsyła w nagłówku X-XSRF-TOKEN;
+     * przeglądarka dosyła ciasteczko sama, a serwer porównuje jedno z drugim.
+     *
+     * setCsrfRequestAttributeName(null) wyłącza leniwe ładowanie tokenu i kodowanie XOR,
+     * dzięki czemu wartość w ciasteczku, w ciele GET /auth/csrf i w nagłówku to ten sam
+     * ciąg. Bez tego token z ciała odpowiedzi nie zgadzałby się z zawartością ciasteczka.
+     */
+    private CsrfTokenRepository csrfTokenRepository() {
+        CookieCsrfTokenRepository repository = new CookieCsrfTokenRepository();
+        // Te same atrybuty co ciasteczka z tokenami - inaczej ciasteczko CSRF nie dotarłoby
+        // tam, gdzie docierają tokeny, i ochrona wywalałaby poprawne żądania.
+        repository.setCookieCustomizer(cookie -> cookie
+                .secure(cookieProperties.secure())
+                .sameSite(cookieProperties.sameSite())
+                .path("/"));
+        return repository;
+    }
+
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http, JwtFilter jwtFilter) throws Exception {
+        CsrfTokenRequestAttributeHandler csrfRequestHandler = new CsrfTokenRequestAttributeHandler();
+        csrfRequestHandler.setCsrfRequestAttributeName(null);
+
         http
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
-                // CSRF wyłączone świadomie: API jest bezstanowe, a ochronę przy
-                // uwierzytelnianiu na ciasteczkach zapewnia atrybut SameSite.
-                // UWAGA: przy dokładaniu logowania przez OAuth2 SameSite trzeba będzie
-                // zluzować do Lax, a wtedy CSRF wymaga osobnego zabezpieczenia.
-                .csrf(csrf -> csrf.disable())
+                .csrf(csrf -> csrf
+                        .csrfTokenRepository(csrfTokenRepository())
+                        .csrfTokenRequestHandler(csrfRequestHandler))
                 // Bez sesji HTTP - tożsamość niesie wyłącznie token w ciasteczku
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .exceptionHandling(ex -> ex
@@ -89,6 +126,11 @@ public class SecurityConfig {
                         // Pozostałe endpointy Actuatora (metrics, prometheus) wystawiają
                         // dane operacyjne o systemie - tylko dla administratora.
                         .requestMatchers("/actuator/**").hasRole("ADMIN")
+                        // Reguła zostaje, mimo że UserController został usunięty (obsługa
+                        // użytkowników idzie na razie przez UserService i repozytorium).
+                        // Domyślne "deny" jest właściwym stanem wyjściowym: gdy kontroler
+                        // wróci, jego endpointy będą chronione od pierwszego commitu,
+                        // a nie dopiero po tym, jak ktoś zauważy, że są otwarte.
                         .requestMatchers("/users/**").hasRole("ADMIN")
                         .anyRequest().authenticated()
                 )
