@@ -22,9 +22,12 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.when;
 
@@ -71,8 +74,11 @@ class OutboxTest {
     void setUp() {
         outboxRepository.deleteAll();
         userRepository.deleteAll();
-        // MimeMessageHelper potrzebuje prawdziwego obiektu wiadomości
-        when(mailSender.createMimeMessage()).thenReturn(new MimeMessage((jakarta.mail.Session) null));
+        // MimeMessageHelper potrzebuje prawdziwego obiektu wiadomości. Nowy przy każdym
+        // wywołaniu, nie jeden współdzielony: paczka wysyłana jest równolegle, więc kilka
+        // wątków ustawiałoby pola tej samej wiadomości naraz.
+        when(mailSender.createMimeMessage())
+                .thenAnswer(invocation -> new MimeMessage((jakarta.mail.Session) null));
     }
 
     /**
@@ -132,6 +138,34 @@ class OutboxTest {
         assertThat(message.getStatus()).isEqualTo(OutboxMessage.Status.SENT);
         assertThat(message.getSentAt()).isNotNull();
         assertThat(message.getLastError()).isNull();
+    }
+
+    @Test
+    @DisplayName("Maile z jednej paczki lecą równolegle, nie jeden po drugim")
+    void publish_shouldSendBatchInParallel() {
+        int count = 4; // tyle, ile wynosi app.outbox.concurrency w profilu testowym
+
+        // Każda wysyłka melduje się i czeka, aż zamelduje się komplet. Przy wysyłce
+        // szeregowej pierwsza nigdy by się nie doczekała pozostałych - i to jest cały
+        // dowód. Bariera z limitem czasu, żeby regresja kończyła się porażką testu,
+        // a nie zawieszeniem budowania.
+        CountDownLatch allStarted = new CountDownLatch(count);
+        doAnswer(invocation -> {
+            allStarted.countDown();
+            if (!allStarted.await(5, TimeUnit.SECONDS)) {
+                throw new MailSendException("wysyłka szeregowa - nie doczekano się pozostałych");
+            }
+            return null;
+        }).when(mailSender).send(any(MimeMessage.class));
+
+        for (int i = 0; i < count; i++) {
+            authService.register(new UserRequestDTO(
+                    "Adrian", "rownolegle" + i + "@example.com", "Haslo12345"));
+        }
+
+        assertThat(publisher.publishBatch()).isEqualTo(count);
+        assertThat(outboxRepository.findAll())
+                .allMatch(message -> message.getStatus() == OutboxMessage.Status.SENT);
     }
 
     @Test

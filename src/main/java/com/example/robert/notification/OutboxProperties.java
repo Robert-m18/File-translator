@@ -28,6 +28,16 @@ public record OutboxProperties(
         /** Ile wiadomości bierzemy na jeden cykl. */
         @Positive int batchSize,
 
+        /**
+         * Ile maili z jednej paczki wysyłamy równolegle.
+         *
+         * Musi być ograniczone, i to jest tu cała trudność: serwery SMTP limitują liczbę
+         * jednoczesnych połączeń z jednego adresu, a przekroczenie limitu kończy się
+         * odrzuceniem albo czasowym zablokowaniem nadawcy. Wysyłka całej paczki naraz
+         * zamieniłaby więc chwilowy ruch w awarię dostarczania.
+         */
+        @Positive int concurrency,
+
         /** Po tylu nieudanych podejściach wiadomość dostaje status FAILED. */
         @Positive int maxAttempts,
 

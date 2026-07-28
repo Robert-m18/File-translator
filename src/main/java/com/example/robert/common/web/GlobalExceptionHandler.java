@@ -10,6 +10,7 @@ import com.example.robert.common.exception.JwtAuthenticationException;
 import com.example.robert.common.exception.NotFoundException;
 import com.example.robert.common.exception.TokenExpiredException;
 import lombok.extern.slf4j.Slf4j;
+import org.hibernate.exception.ConstraintViolationException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -131,9 +132,35 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
      */
     @ExceptionHandler(DataIntegrityViolationException.class)
     public ProblemDetail handleDataIntegrity(DataIntegrityViolationException ex) {
-        log.warn("Naruszenie więzów integralności: {}", ex.getMostSpecificCause().getMessage());
+        log.warn("Naruszenie więzów integralności: {}", constraintOf(ex));
         return ApiProblem.of(HttpStatus.CONFLICT, "Konflikt danych",
                 "Operacja narusza ograniczenia bazy danych", "DATA_INTEGRITY_VIOLATION");
+    }
+
+    /**
+     * Nazwa naruszonego więzu, a NIE komunikat sterownika.
+     *
+     * Komunikat MySQL-a niesie wartość, która kolizję wywołała:
+     * "Duplicate entry 'ktos@example.com' for key 'users.email'". Najczęstszym wyzwalaczem
+     * tego handlera jest właśnie wyścig przy rejestracji na ten sam adres, więc logowanie
+     * komunikatu wprost wpisywałoby adresy użytkowników do logu produkcyjnego - poziom WARN
+     * przechodzi przez prodowy próg. Nazwa więzu mówi diagnostycznie dokładnie tyle samo
+     * ("wiadomo, który unikat pękł") i nie zawiera danych osobowych.
+     */
+    private String constraintOf(DataIntegrityViolationException ex) {
+        // Przejście po całym łańcuchu, a nie getMostSpecificCause(): ta metoda schodzi do
+        // NAJGŁĘBSZEJ przyczyny, czyli do SQLException sterownika, a ConstraintViolationException
+        // Hibernate'a siedzi piętro wyżej. Sprawdzenie samego "najbardziej szczegółowego"
+        // nigdy by go nie znalazło - i logowałoby dokładnie ten komunikat, którego tu unikamy.
+        for (Throwable cause = ex; cause != null; cause = cause.getCause()) {
+            if (cause instanceof ConstraintViolationException violation
+                    && violation.getConstraintName() != null) {
+                return violation.getConstraintName();
+            }
+        }
+        // Nieznany więz - zostaje sam typ przyczyny. Świadomie mniej informacji niż
+        // w komunikacie: przy nierozpoznanym błędzie nie wiadomo, co ten komunikat niesie.
+        return ex.getMostSpecificCause().getClass().getSimpleName();
     }
 
     /**

@@ -91,6 +91,11 @@ public class RateLimitFilter extends OncePerRequestFilter {
 
         long retryAfterSeconds = Math.max(1, probe.getNanosToWaitForRefill() / 1_000_000_000L);
 
+        // Adres IP w logu jest tu WYJĄTKIEM od zasady "nie logujemy danych osobowych"
+        // i wyjątkiem świadomym. To jedyny log o nadużyciu, a bez adresu nie da się na nim
+        // niczego zrobić: ani odróżnić jednego bota od tysiąca użytkowników za NAT-em, ani
+        // zablokować źródła. Zdjęcie IP stąd zamienia ten log w licznik bez treści -
+        // gdyby ktoś chciał to "poprawić", to jest powód, dla którego zostaje.
         log.warn("Przekroczono limit żądań dla {} (ścieżka {}), ponowna próba za {}s",
                 clientIp(request), policy.path(), retryAfterSeconds);
 

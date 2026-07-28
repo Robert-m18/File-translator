@@ -63,6 +63,10 @@ app:
     # Gdyby przestało być, zamiast skracania interwału właściwym krokiem jest CDC.
     poll-interval: 10s
     batch-size: 50
+    # Maile z paczki lecą równolegle, ale nie wszystkie naraz: serwery SMTP limitują
+    # liczbę jednoczesnych połączeń z jednego nadawcy i przekroczenie limitu kończy się
+    # odrzuceniem. Podnosić dopiero po sprawdzeniu, ile pozwala konkretny dostawca.
+    concurrency: 4
     max-attempts: 5
     # Rośnie wykładniczo: 30s, 1m, 2m, 4m - chwilowa awaria SMTP nie zamienia się
     # w dobijanie serwera co sekundę.

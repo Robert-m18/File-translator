@@ -51,7 +51,7 @@ public class MailOutbox {
     }
 
     private void enqueue(String recipient, MailTemplate template, Map<String, String> variables) {
-        repository.save(new OutboxMessage(
+        OutboxMessage saved = repository.save(new OutboxMessage(
                 recipient,
                 template,
                 objectMapper.writeValueAsString(variables),
@@ -60,6 +60,11 @@ public class MailOutbox {
 
         // Bez adresu w logu - to dane osobowe. Do powiązania z konkretnym żądaniem
         // służy traceId dokładany przez TraceIdFilter.
-        log.info("Mail zamówiony w skrzynce nadawczej ({})", template);
+        //
+        // id jest tu po to, żeby dało się przejść od żądania do wysyłki. OutboxPublisher
+        // pracuje na wątku harmonogramu i na wątkach puli wysyłkowej, gdzie MDC jest puste,
+        // więc jego logi nie mają traceId - i bez id po obu stronach łańcuch urywał się
+        // dokładnie w tym miejscu. Teraz: traceId -> id (tutaj), id -> wynik (tam).
+        log.info("Mail zamówiony w skrzynce nadawczej (id={}, szablon={})", saved.getId(), template);
     }
 }

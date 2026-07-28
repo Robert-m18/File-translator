@@ -62,6 +62,8 @@ app:
     enabled: false
     poll-interval: 1h
     batch-size: 50
+    # Powyżej 1, żeby testy przechodziły przez ścieżkę równoległą, a nie obok niej
+    concurrency: 4
     # Niżej niż na produkcji, żeby test wyczerpania prób nie potrzebował pięciu iteracji
     max-attempts: 3
     retry-backoff: 1s
