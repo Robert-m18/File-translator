@@ -32,6 +32,11 @@ jwt:
 app:
   frontend:
     url: "${FRONTEND_URL}"
+  mail:
+    # Bez wartości domyślnej - na produkcji adres nadawcy musi być tym, który
+    # dostawca poczty ma zweryfikowany dla naszej domeny. Domyślny adres z profilu
+    # bazowego przeszedłby start aplikacji i wywalił się dopiero na pierwszym mailu.
+    from: "${MAIL_FROM}"
   cookie:
     secure: true
     # None, żeby ciasteczka docierały do API stojącego pod inną domeną niż SPA.

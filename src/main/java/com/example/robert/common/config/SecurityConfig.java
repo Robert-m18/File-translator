@@ -26,7 +26,7 @@ import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
-import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.security.web.access.ExceptionTranslationFilter;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
 import org.springframework.security.web.csrf.CsrfTokenRepository;
 import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
@@ -134,7 +134,36 @@ public class SecurityConfig {
                         .requestMatchers("/users/**").hasRole("ADMIN")
                         .anyRequest().authenticated()
                 )
-                .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);
+                /*
+                 * JwtFilter stoi ZA SessionManagementFilter, a nie przed
+                 * UsernamePasswordAuthenticationFilter - to decyzja o poprawności ochrony
+                 * CSRF, nie kosmetyka kolejności.
+                 *
+                 * Włączony CSRF dokłada CsrfAuthenticationStrategy do strategii uwierzytelnienia
+                 * (dokłada, nie zastępuje - podanie własnej strategii przez
+                 * sessionAuthenticationStrategy() jej NIE wyłącza). Strategia ta przy każdym
+                 * nowym uwierzytelnieniu kasuje token CSRF i wystawia nowy. W aplikacji z sesją
+                 * dzieje się to raz, przy logowaniu, i chroni przed utrwaleniem tokenu. Tutaj
+                 * sesji nie ma, więc SessionManagementFilter przy KAŻDYM żądaniu widzi
+                 * uwierzytelnienie, którego "wcześniej nie było" - o ile JwtFilter zdążył je
+                 * ustawić przed nim.
+                 *
+                 * Objaw był taki: frontend pobiera token z GET /auth/csrf, a serwer unieważnia
+                 * mu go przy najbliższym żądaniu zalogowanego użytkownika - również przy zwykłym
+                 * GET-cie. Pierwsze żądanie zmieniające stan jeszcze przechodziło, każde następne
+                 * wracało z 403 CSRF_TOKEN_INVALID, a ponowne pobranie tokenu nie pomagało, bo
+                 * nowy ginął tak samo. Wylogowanie i odświeżenie tokenu były nieosiągalne.
+                 *
+                 * Po przesunięciu SessionManagementFilter widzi jeszcze uwierzytelnienie
+                 * anonimowe (ustawia je AnonymousAuthenticationFilter) i strategii nie odpala.
+                 * JwtFilter podstawia właściwego użytkownika chwilę później, wciąż przed
+                 * AuthorizationFilter, więc autoryzacja ścieżek działa bez zmian.
+                 *
+                 * Uwaga na testy: .with(csrf()) ze spring-security-test podmienia repozytorium
+                 * tokenów i omija całą tę ścieżkę, więc tego błędu nie wykryje. Regresję pilnuje
+                 * CsrfLifecycleTest, który przechodzi prawdziwą wymianę ciasteczko-nagłówek.
+                 */
+                .addFilterBefore(jwtFilter, ExceptionTranslationFilter.class);
 
         return http.build();
     }

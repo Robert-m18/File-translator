@@ -21,11 +21,16 @@ COPY src/ src/
 # wydłużałoby budowanie obrazu.
 RUN ./mvnw -B -ntp clean package -DskipTests
 
+# Stała nazwa jara przed rozpakowaniem. Nazwa z targetu niesie wersję
+# (file_translator-0.0.1-SNAPSHOT.jar), a ta trafia potem do ENTRYPOINT - przy
+# pierwszym podbiciu wersji obraz przestałby startować.
+RUN cp target/*.jar application.jar
+
 # Rozpakowanie fat-jara na warstwy. Zależności zmieniają się rzadko, a kod aplikacji
 # przy każdym commicie - rozdzielenie ich na osobne warstwy sprawia, że wdrożenie
 # przesyła kilkaset kilobajtów zamiast kilkudziesięciu megabajtów.
 # Uwaga: w Spring Boot 3.3+ tryb "layertools" zastąpiono trybem "tools".
-RUN java -Djarmode=tools -jar target/*.jar extract --layers --destination extracted
+RUN java -Djarmode=tools -jar application.jar extract --layers --destination extracted
 
 # ---------------------------------------------------------------------------
 # Etap 2: obraz uruchomieniowy
@@ -50,4 +55,14 @@ EXPOSE 8080
 # kontenera, więc ten sam obraz działa poprawnie przy różnych limitach.
 ENV JAVA_OPTS="-XX:MaxRAMPercentage=75.0 -XX:+ExitOnOutOfMemoryError"
 
-ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS org.springframework.boot.loader.launch.JarLauncher"]
+# Uruchamiamy cienki jar z warstwy "application", NIE przez JarLauncher.
+#
+# Tryb "tools" w Spring Boot 4 rozkłada archiwum inaczej niż dawny "layertools":
+# w application/ leży zwykły jar z Main-Class i z Class-Path wskazującym na lib/,
+# zależności lądują w dependencies/lib/, a katalog spring-boot-loader/ jest PUSTY -
+# klasa org.springframework.boot.loader.launch.JarLauncher w tym układzie nie
+# istnieje. Poprzedni ENTRYPOINT wywoływał ją wprost, więc obraz budował się
+# poprawnie i wywalał się dopiero przy starcie kontenera na ClassNotFoundException.
+# Warstwy kopiowane są płasko do /app, dlatego względne lib/... z manifestu trafia
+# dokładnie tam, gdzie leżą zależności.
+ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar application.jar"]

@@ -37,7 +37,13 @@ public class EmailService {
     public EmailService(JavaMailSender mailSender,
                         TemplateEngine templateEngine,
                         @Value("${app.frontend.url}") String frontendUrl,
-                        @Value("${spring.mail.username}") String mailFrom) {
+                        // Adres nadawcy, a NIE spring.mail.username. To były wcześniej te same
+                        // ustawienia i wyglądało to niewinnie, bo u części dostawców login SMTP
+                        // faktycznie jest adresem. U SES czy SendGrida jest nim klucz API albo
+                        // użytkownik IAM, a lokalnie - dowolny ciąg z docker-compose. Serwer
+                        // odrzuca wtedy kopertę na MAIL FROM (553 5.1.3) i nie wychodzi ŻADEN
+                        // mail: rejestracji nie da się potwierdzić, więc nie da się też zalogować.
+                        @Value("${app.mail.from}") String mailFrom) {
         this.mailSender = mailSender;
         this.templateEngine = templateEngine;
         this.frontendUrl = frontendUrl;

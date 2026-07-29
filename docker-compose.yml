@@ -12,7 +12,12 @@ services:
       MYSQL_ROOT_PASSWORD: root
       MYSQL_DATABASE: userapitest
     ports:
-      - "3306:3306"
+      # Na hoście 3307, w kontenerze 3306. Aplikacja łączy się siecią Compose'a
+      # (host "mysql", port 3306), więc mapowanie jest wyłącznie dla narzędzi
+      # uruchamianych na hoście. 3306 zostawiamy wolne celowo: na maszynach
+      # deweloperskich stoi tam zwykle lokalny MySQL albo MariaDB i kolizja
+      # portu wywalałaby `docker compose up` zamiast czegokolwiek uruchomić.
+      - "3307:3306"
     volumes:
       - mysql-data:/var/lib/mysql
     healthcheck:
