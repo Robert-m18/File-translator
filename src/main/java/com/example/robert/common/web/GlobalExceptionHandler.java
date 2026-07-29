@@ -4,10 +4,8 @@
  */
 package com.example.robert.common.web;
 
-import com.example.robert.common.exception.EmailAlreadyExistException;
 import com.example.robert.common.exception.InvalidTokenException;
 import com.example.robert.common.exception.JwtAuthenticationException;
-import com.example.robert.common.exception.NotFoundException;
 import com.example.robert.common.exception.TokenExpiredException;
 import lombok.extern.slf4j.Slf4j;
 import org.hibernate.exception.ConstraintViolationException;
@@ -44,17 +42,16 @@ import java.util.Map;
 @RestControllerAdvice
 public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
 
-    @ExceptionHandler(NotFoundException.class)
-    public ProblemDetail handleNotFound(NotFoundException ex) {
-        log.warn("Zasób nie znaleziony: {}", ex.getMessage());
-        return ApiProblem.of(HttpStatus.NOT_FOUND, "Nie znaleziono", ex.getMessage(), "RESOURCE_NOT_FOUND");
-    }
-
-    @ExceptionHandler(EmailAlreadyExistException.class)
-    public ProblemDetail handleEmailExists(EmailAlreadyExistException ex) {
-        log.warn("Konflikt adresu email");
-        return ApiProblem.of(HttpStatus.CONFLICT, "Konflikt", ex.getMessage(), "EMAIL_ALREADY_EXISTS");
-    }
+    /*
+     * Nie ma tu handlerów NotFoundException i EmailAlreadyExistException - oba wyjątki
+     * zniknęły razem z martwym CRUD-em w UserService. Drugi z nich był wręcz pułapką:
+     * odpowiedź 409 EMAIL_ALREADY_EXISTS stoi wprost naprzeciw zasady, że API nie zdradza,
+     * które adresy są zarejestrowane (patrz handleBadCredentials niżej i AuthService.register).
+     * Gotowy handler kusiłby, żeby go użyć przy pierwszym lepszym konflikcie adresu.
+     *
+     * Nieznana ścieżka HTTP i tak wraca jako ProblemDetail - obsługuje ją
+     * ResponseEntityExceptionHandler, po którym ta klasa dziedziczy.
+     */
 
     @ExceptionHandler(BadCredentialsException.class)
     public ProblemDetail handleBadCredentials(BadCredentialsException ex) {

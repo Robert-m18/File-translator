@@ -57,7 +57,19 @@ public class AuthService {
     private final RefreshTokenService refreshTokenService;
     private final MailOutbox mailOutbox;
 
-    @Transactional
+    /**
+     * Celowo BEZ @Transactional.
+     *
+     * Transakcja obejmowałaby porównanie hasha BCrypt, a to z definicji operacja
+     * kosztowna (kilkadziesiąt-kilkaset ms). Przez ten czas połączenie z puli byłoby
+     * zajęte, choć nic z bazy nie jest w tym momencie potrzebne - przy serii logowań
+     * pula wysycha na czekaniu na procesor, a nie na bazę.
+     *
+     * Nie ma tu też czego rollbackować: jedyny zapis to rejestracja sesji, a
+     * RefreshTokenService.startSession ma własną transakcję. Licznik nieudanych logowań
+     * jest po stronie LoginAttemptService i tak czy tak działa w REQUIRES_NEW,
+     * bo musi przeżyć wyjątek, który go wywołał.
+     */
     public TokenPair login(String email, String password) {
         // Rzuca BadCredentialsException / DisabledException / LockedException -
         // wszystkie mapowane centralnie w GlobalExceptionHandler.

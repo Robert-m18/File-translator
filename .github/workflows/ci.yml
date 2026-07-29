@@ -49,6 +49,84 @@ jobs:
           path: target/surefire-reports/
           if-no-files-found: warn
 
+  # Ten sam zestaw testów, ale na silnikach używanych na produkcji zamiast na H2
+  # i na kubełkach w pamięci. Osobny job, a nie zamiast poprzedniego: szybki build
+  # na H2 ma dalej dawać wynik w kilkadziesiąt sekund, bez czekania na kontenery.
+  #
+  # Co to faktycznie sprawdza, a czego build na H2 sprawdzić nie może:
+  #   - migracje Liquibase na MySQL-u (dropIndex, dropTable, addNotNullConstraint
+  #     zachowują się różnie w różnych silnikach, a ddl-auto: validate wykryje
+  #     rozjazd encji ze schematem dopiero przy starcie aplikacji);
+  #   - FOR UPDATE SKIP LOCKED w skrzynce nadawczej na prawdziwym MySQL-u;
+  #   - RedisBucketProvider, czyli jedyną gałąź limitera, która na profilu testowym
+  #     nigdy się nie wykonywała.
+  integration:
+    name: Testy na MySQL i Redisie
+    runs-on: ubuntu-latest
+
+    services:
+      # Wersje takie same jak w docker-compose.yml - CI ma sprawdzać to, co lokalnie.
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: userapitest
+        ports:
+          - 3306:3306
+        # Bez health checka job ruszyłby, zanim baza przyjmuje połączenia - kontener
+        # wstaje w sekundę, ale MySQL inicjuje katalog danych kilkanaście sekund dłużej.
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Test against MySQL and Redis
+        # Przez zmienne środowiskowe, a NIE przez osobny profil testowy: profil trzeba by
+        # aktywować w każdej klasie testowej (@ActiveProfiles("test") jest wpisane na sztywno),
+        # a drugi plik z konfiguracją rozjeżdżałby się z pierwszym przy każdej zmianie.
+        # Zmienne środowiskowe stoją w kolejności pierwszeństwa Springa WYŻEJ niż
+        # application-test.yml, więc podmieniają tylko to, co ma być inne, i dziedziczą resztę.
+        env:
+          SPRING_DATASOURCE_URL: jdbc:mysql://127.0.0.1:3306/userapitest
+          SPRING_DATASOURCE_USERNAME: root
+          SPRING_DATASOURCE_PASSWORD: root
+          # Jawnie, bo application-test.yml wskazuje sterownik H2 - sama zmiana URL-a
+          # zostawiłaby ustawiony org.h2.Driver.
+          SPRING_DATASOURCE_DRIVER_CLASS_NAME: com.mysql.cj.jdbc.Driver
+          # RedisBucketProvider łączy się w konstruktorze, więc samo podniesienie kontekstu
+          # sprawdza konfigurację połączenia; RateLimitTest sprawdza potem liczenie kubełków.
+          APP_RATE_LIMIT_STORE: redis
+          APP_RATE_LIMIT_REDIS_URL: redis://127.0.0.1:6379
+        run: ./mvnw -B -ntp test
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports-mysql
+          path: target/surefire-reports/
+          if-no-files-found: warn
+
   docker:
     name: Docker image builds
     runs-on: ubuntu-latest
