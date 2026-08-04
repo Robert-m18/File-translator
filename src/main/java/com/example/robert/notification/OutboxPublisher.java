@@ -160,7 +160,7 @@ public class OutboxPublisher {
      * @return wiadomości zarezerwowane dla tej instancji, w stanie sprzed rezerwacji
      */
     private List<OutboxMessage> claimBatch() {
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = OutboxClock.now();
 
         List<OutboxMessage> claimed = shortTransaction.execute(status -> {
             List<OutboxMessage> candidates =
@@ -191,7 +191,7 @@ public class OutboxPublisher {
 
         try {
             deliver(message);
-            shortTransaction.execute(status -> repository.markSent(message.getId(), LocalDateTime.now()));
+            shortTransaction.execute(status -> repository.markSent(message.getId(), OutboxClock.now()));
             log.info("Mail wysłany ze skrzynki nadawczej (id={}, szablon={}, podejście={})",
                     message.getId(), message.getTemplate(), attempt);
             return true;
@@ -232,7 +232,10 @@ public class OutboxPublisher {
 
             // Backoff wykładniczy - chwilowa awaria SMTP nie zamienia się w dobijanie serwera
             Duration delay = properties.retryBackoff().multipliedBy(1L << (attempt - 1));
-            LocalDateTime nextRetry = LocalDateTime.now().plus(delay);
+            // Obcięcie jak wszędzie w tej ścieżce: ten znacznik też jest potem porównywany
+            // warunkiem "<= now", więc zaokrąglenie w górę odsuwałoby ponowienie o mikrosekundę
+            // i - przy dostatecznie krótkim backoffie - powtarzało ten sam wyścig.
+            LocalDateTime nextRetry = OutboxClock.truncate(LocalDateTime.now().plus(delay));
 
             shortTransaction.execute(status -> repository.markRetry(message.getId(), nextRetry, error));
             log.warn("Nie udało się wysłać maila (id={}, podejście={}/{}), ponowienie za {}: {}",

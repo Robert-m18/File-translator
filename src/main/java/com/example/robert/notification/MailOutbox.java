@@ -55,7 +55,10 @@ public class MailOutbox {
                 recipient,
                 template,
                 objectMapper.writeValueAsString(variables),
-                LocalDateTime.now()
+                // Obcięty do precyzji kolumny - inaczej baza zaokrągli go W GÓRĘ i wiersz
+                // zapisany "na teraz" będzie miał czas w przyszłości, niewidoczny dla
+                // najbliższego cyklu publishera. Uzasadnienie: OutboxClock.
+                OutboxClock.now()
         ));
 
         // Bez adresu w logu - to dane osobowe. Do powiązania z konkretnym żądaniem

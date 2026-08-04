@@ -1,0 +1,106 @@
+package com.example.robert.notification;
+
+import com.example.robert.notification.model.MailTemplate;
+import com.example.robert.notification.model.OutboxMessage;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.ActiveProfiles;
+
+import java.time.LocalDateTime;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+/**
+ * Znacznik czasu zapisanego wiersza nie może wyprzedzać zegara.
+ *
+ * To jest regresja na wyścig, który wywracał OutboxTest mniej więcej co czwarty przebieg
+ * przez ponad tydzień, za każdym razem inną metodą - stąd fałszywy trop "to interakcja
+ * między testami".
+ *
+ * Mechanizm: kolumny czasowe mają precyzję MIKROSEKUNDOWĄ (TIMESTAMP(6) / DATETIME(6)),
+ * a LocalDateTime.now() na tej maszynie daje setki nanosekund. Baza zaokrągla nadmiarowe
+ * cyfry W GÓRĘ, więc wiersz zapisany "na teraz" lądował w niej ze znacznikiem do pół
+ * mikrosekundy w PRZYSZŁOŚCI. Publisher szuka wierszy warunkiem next_retry_at <= :now,
+ * więc taki wiersz bywał niewidoczny dla własnego cyklu i ginął zawsze ten zapisany
+ * jako ostatni - stąd "wysłano 0 z 1" i zablokowana bariera w teście równoległości.
+ *
+ * Test jest w pakiecie notification, bo OutboxClock jest pakietowo-prywatny; nie ma powodu
+ * wystawiać go szerzej tylko po to, żeby dało się go sprawdzić.
+ *
+ * Klasa siedzi OSOBNO od OutboxTest świadomie: tamta klasa jest wciąż niestabilna z innego,
+ * nieustalonego powodu (patrz CLAUDE.md), a regresja na już zrozumianą przyczynę nie może
+ * dzielić losu testu, który bywa czerwony.
+ */
+@SpringBootTest
+@ActiveProfiles("test")
+class OutboxTimestampTest {
+
+    @Autowired
+    private OutboxMessageRepository repository;
+
+    @BeforeEach
+    void setUp() {
+        repository.deleteAll();
+    }
+
+    private OutboxMessage save(LocalDateTime timestamp) {
+        OutboxMessage saved = repository.save(new OutboxMessage(
+                "znacznik@example.com", MailTemplate.VERIFICATION, "{}", timestamp));
+        repository.flush();
+        // Bez tego odczytalibyśmy obiekt z kontekstu persistence, czyli wartość sprzed
+        // zapisu - a pytanie brzmi właśnie, co baza z niej zrobiła.
+        return repository.findById(saved.getId()).orElseThrow();
+    }
+
+    /**
+     * Sedno: to, co wygenerowało produkcyjne źródło czasu, musi wrócić z bazy BEZ ZMIANY.
+     *
+     * Asercja jest na równość, nie na "nie później", bo każdy rozjazd między wartością
+     * w pamięci a w bazie oznacza, że aplikacja i baza nie zgadzają się co do tego, kiedy
+     * jest "teraz" - a cała rezerwacja wierszy stoi na porównaniu tych dwóch.
+     */
+    @Test
+    @DisplayName("Zapisany znacznik wraca z bazy bez zmiany")
+    void savedTimestamp_shouldSurviveRoundTripUnchanged() {
+        LocalDateTime generated = OutboxClock.now();
+
+        OutboxMessage read = save(generated);
+
+        assertThat(read.getNextRetryAt()).isEqualTo(generated);
+        assertThat(read.getCreatedAt()).isEqualTo(generated);
+    }
+
+    /**
+     * Dowód, że zagrożenie jest realne, a obcinanie w OutboxClock nie jest przesadną
+     * ostrożnością: wartość z cyframi poniżej mikrosekundy WRACA Z BAZY PRZESUNIĘTA W PRZÓD.
+     *
+     * Gdyby ten test kiedyś zaczął padać, znaczyłoby to, że baza (albo sterownik, albo
+     * precyzja kolumny) zmieniła zachowanie na obcinanie - wtedy OutboxClock przestaje być
+     * potrzebny. To jedyny sposób, żeby dowiedzieć się tego inaczej niż przez powrót
+     * niestabilnych testów.
+     */
+    @Test
+    @DisplayName("Nieobcięty znacznik wraca z bazy przesunięty w przyszłość")
+    void subMicrosecondPrecision_isRoundedUpByDatabase() {
+        LocalDateTime peryferyjny = LocalDateTime.now()
+                .truncatedTo(OutboxClock.COLUMN_PRECISION)
+                .plusNanos(600);
+
+        OutboxMessage read = save(peryferyjny);
+
+        assertThat(read.getNextRetryAt())
+                .as("baza zaokrągliła w górę, więc znacznik jest teraz w przyszłości")
+                .isAfter(peryferyjny);
+    }
+
+    @Test
+    @DisplayName("Źródło czasu skrzynki nie generuje cyfr poniżej mikrosekundy")
+    void clock_shouldNotProduceSubMicrosecondDigits() {
+        assertThat(OutboxClock.now().getNano() % 1_000).isZero();
+        assertThat(OutboxClock.truncate(LocalDateTime.now().plusNanos(999)).getNano() % 1_000)
+                .isZero();
+    }
+}
