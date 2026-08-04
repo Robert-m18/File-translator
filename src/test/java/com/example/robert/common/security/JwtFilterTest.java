@@ -75,6 +75,7 @@ class JwtFilterTest {
         when(request.getCookies()).thenReturn(new Cookie[]{tokenCookie});
 
         when(jwtUtil.extractUsername("valid-jwt-token")).thenReturn("adrian@test.pl");
+        when(jwtUtil.extractTokenType("valid-jwt-token")).thenReturn("access");
 
         UserDetails userDetails = new User(
                 "adrian@test.pl",
@@ -118,5 +119,35 @@ class JwtFilterTest {
         ProblemDetail problem = problemCaptor.getValue();
         assertThat(problem.getStatus()).isEqualTo(HttpStatus.UNAUTHORIZED.value());
         assertThat(problem.getProperties()).containsEntry("code", "INVALID_TOKEN");
+    }
+
+    /**
+     * Token odświeżający podstawiony w ciasteczko accessToken. Podpis ma poprawny -
+     * jest wydany tym samym kluczem - więc odsiać go może wyłącznie kontrola claimu "type".
+     *
+     * Dlaczego to istotne: ten filtr nie zagląda do bazy, a token odświeżający żyje 7 dni.
+     * Bez tej kontroli sesja unieważniona przez wylogowanie dalej otwierałaby chronione
+     * endpointy do końca ważności tokenu.
+     */
+    @Test
+    void doFilter_shouldReject_whenTokenTypeIsNotAccess() throws Exception {
+        //given
+        when(request.getCookies()).thenReturn(new Cookie[]{new Cookie("accessToken", "refresh-jwt-token")});
+        when(jwtUtil.extractUsername("refresh-jwt-token")).thenReturn("adrian@test.pl");
+        when(jwtUtil.extractTokenType("refresh-jwt-token")).thenReturn("refresh");
+
+        //when
+        jwtFilter.doFilterInternal(request, response, filterChain);
+
+        //then
+        assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+        verify(filterChain, never()).doFilter(any(), any());
+        // Baza nie może zostać dotknięta - odsiewamy to na poziomie samego tokenu
+        verifyNoInteractions(userDetailsService);
+
+        ArgumentCaptor<ProblemDetail> problemCaptor = ArgumentCaptor.forClass(ProblemDetail.class);
+        verify(problemWriter).write(eq(response), problemCaptor.capture());
+        assertThat(problemCaptor.getValue().getProperties())
+                .containsEntry("code", "INVALID_TOKEN_TYPE");
     }
 }

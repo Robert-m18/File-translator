@@ -11,7 +11,9 @@ import com.example.robert.auth.dto.ForgotPasswordRequest;
 import com.example.robert.auth.dto.LoginRequest;
 import com.example.robert.auth.dto.ResetPasswordRequest;
 import com.example.robert.auth.dto.TokenPair;
+import com.example.robert.user.dto.CurrentUserResponse;
 import com.example.robert.user.dto.UserRequestDTO;
+import com.example.robert.user.model.User;
 import com.example.robert.common.exception.JwtAuthenticationException;
 import com.example.robert.common.web.SuccessMessage;
 import com.example.robert.auth.AuthService;
@@ -22,6 +24,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.web.csrf.CsrfToken;
 import org.springframework.web.bind.annotation.*;
 import java.time.LocalDateTime;
@@ -117,6 +120,31 @@ public class AuthController {
     @GetMapping("/csrf")
     public CsrfTokenResponse csrfToken(CsrfToken token) {
         return new CsrfTokenResponse(token.getHeaderName(), token.getToken());
+    }
+
+    /**
+     * Zwraca dane właściciela bieżącej sesji. Jedyny endpoint w tej aplikacji, który
+     * WYMAGA zalogowania - reguła autoryzacji siedzi w SecurityConfig, przed permitAll
+     * dla /auth/**, bo bez niej ta ścieżka byłaby publiczna razem z resztą prefiksu.
+     *
+     * Po co on jest: ciasteczka z tokenami są httpOnly, więc JavaScript ich nie odczyta.
+     * Po odświeżeniu strony SPA nie ma zatem ŻADNEGO sposobu, żeby samodzielnie stwierdzić,
+     * czy sesja jeszcze żyje - musi zapytać serwer. 200 znaczy "zalogowany", 401 "na ekran
+     * logowania". Alternatywa, czyli flaga w localStorage, kłamie w obie strony: zostaje
+     * po wygaśnięciu tokenu i znika mimo ważnej sesji po stronie serwera.
+     *
+     * Mapowanie ręczne, bo to cztery pola z obiektu, który już jest w ręku. Principal
+     * podstawia JwtFilter, a ten bierze go z UserDetailsServiceImpl, czyli wprost
+     * z repozytorium - to świeżo odczytany wiersz, nie snapshot sprzed 15 minut z tokenu.
+     * Dodatkowe zapytanie do bazy nic by tu nie wniosło.
+     */
+    @GetMapping("/me")
+    public CurrentUserResponse me(@AuthenticationPrincipal User user) {
+        return new CurrentUserResponse(
+                user.getId(),
+                user.getName(),
+                user.getEmail(),
+                user.getRole().name());
     }
 
     @PostMapping("/refresh")

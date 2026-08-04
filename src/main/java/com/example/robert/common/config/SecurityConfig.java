@@ -16,6 +16,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.DefaultAuthenticationEventPublisher;
 import org.springframework.security.authentication.ProviderManager;
@@ -122,6 +123,22 @@ public class SecurityConfig {
                         .accessDeniedHandler(accessDeniedHandler)
                 )
                 .authorizeHttpRequests(auth -> auth
+                        /*
+                         * MUSI stać przed regułą dla PUBLIC_ENDPOINTS - reguły dopasowywane
+                         * są w kolejności deklaracji i wygrywa pierwsze trafienie, a
+                         * PUBLIC_ENDPOINTS zawiera /auth/**, które objęłoby także tę ścieżkę.
+                         *
+                         * Skutek pominięcia nie byłby tylko taki, że "endpoint jest otwarty".
+                         * JwtFilter działa niezależnie od reguł autoryzacji, więc dla
+                         * zalogowanego wszystko wyglądałoby poprawnie, a anonim dostałby
+                         * @AuthenticationPrincipal == null, czyli NPE i 500 zamiast czystego
+                         * 401 - i to na jedynej ścieżce, o którą frontend pyta przy każdym
+                         * starcie, żeby sprawdzić, czy sesja żyje.
+                         *
+                         * Zawężone do GET świadomie: /auth/me nie ma wariantu zmieniającego
+                         * stan, więc reguła nie przykryje przypadkiem żadnego przyszłego POST-a.
+                         */
+                        .requestMatchers(HttpMethod.GET, "/auth/me").authenticated()
                         .requestMatchers(PUBLIC_ENDPOINTS).permitAll()
                         // Pozostałe endpointy Actuatora (metrics, prometheus) wystawiają
                         // dane operacyjne o systemie - tylko dla administratora.
