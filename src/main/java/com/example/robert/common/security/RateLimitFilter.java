@@ -13,12 +13,9 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.core.Ordered;
-import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
-import org.springframework.stereotype.Component;
 import org.springframework.util.AntPathMatcher;
 import org.springframework.web.filter.OncePerRequestFilter;
 
@@ -42,13 +39,23 @@ import java.util.Optional;
  * aplikacji każda liczy limit osobno. Do wdrożenia wieloinstancyjnego trzeba podmienić
  * magazyn na Redis (bucket4j-redis) - reszta tej klasy zostaje bez zmian.
  *
- * Filtr działa PRZED łańcuchem Spring Security: odrzucone żądanie nie kosztuje wtedy
- * ani zapytania do bazy, ani porównania hasha BCrypt, czyli dokładnie tego, co przy
- * ataku siłowym jest najdroższe.
+ * Filtr działa w łańcuchu Spring Security, ale TUŻ ZA CorsFilter i przed uwierzytelnianiem:
+ * odrzucone żądanie nie kosztuje ani zapytania do bazy, ani porównania hasha BCrypt, czyli
+ * dokładnie tego, co przy ataku siłowym jest najdroższe.
+ *
+ * Ta pozycja to naprawa konkretnego błędu, nie porządkowanie kolejności. Wcześniej filtr
+ * stał PRZED całym łańcuchem (@Component + @Order(HIGHEST_PRECEDENCE + 10)), czyli również
+ * przed CorsFilter - a wtedy odpowiedź 429 wychodziła BEZ nagłówka Access-Control-Allow-Origin.
+ * Przeglądarka blokuje taką odpowiedź, więc frontend na innym origin nie dostawał komunikatu
+ * "spróbuj ponownie za X s", tylko błąd sieci od fetch(): dla użytkownika wyglądało to jak
+ * padnięty serwer, a nie jak przekroczony limit. Treść odpowiedzi była poprawna od zawsze -
+ * po prostu nigdy nie docierała. Sprawdzone 2026-08-04 curl-em z nagłówkiem Origin,
+ * regresję pilnuje RateLimitTest.
+ *
+ * Filtr CORS jest tani (kilka porównań nagłówków), więc przesunięcie za niego nie psuje
+ * zasady, dla której limiter stoi wcześnie.
  */
 @Slf4j
-@Component
-@Order(Ordered.HIGHEST_PRECEDENCE + 10)
 public class RateLimitFilter extends OncePerRequestFilter {
 
     private static final String HEADER_REMAINING = "X-RateLimit-Remaining";

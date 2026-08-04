@@ -11,8 +11,12 @@ import com.example.robert.common.observability.TraceIdFilter;
 import com.example.robert.common.security.ProblemResponseWriter;
 import com.example.robert.common.security.RestAccessDeniedHandler;
 import com.example.robert.common.security.RestAuthenticationEntryPoint;
+import com.example.robert.common.security.RateLimitFilter;
+import com.example.robert.common.security.RateLimitProperties;
+import com.example.robert.common.security.ratelimit.BucketProvider;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -31,6 +35,7 @@ import org.springframework.security.web.access.ExceptionTranslationFilter;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
 import org.springframework.security.web.csrf.CsrfTokenRepository;
 import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
+import org.springframework.web.filter.CorsFilter;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
@@ -73,6 +78,37 @@ public class SecurityConfig {
         return new JwtFilter(jwtUtil, userDetailsService, problemWriter);
     }
 
+    @Bean
+    public RateLimitFilter rateLimitFilter(RateLimitProperties rateLimitProperties,
+                                           ProblemResponseWriter problemWriter,
+                                           BucketProvider bucketProvider) {
+        return new RateLimitFilter(rateLimitProperties, problemWriter, bucketProvider);
+    }
+
+    /**
+     * Wyłącza rejestrację filtrów w kontenerze serwletów.
+     *
+     * Spring Boot rejestruje KAŻDY bean typu Filter jako zwykły filtr serwletowy, niezależnie
+     * od tego, czy powstał przez @Component, czy przez @Bean - i niezależnie od tego, że
+     * dokładamy go jawnie do łańcucha Spring Security. Bez tego oba filtry wykonywałyby się
+     * DWA RAZY na żądanie. Dla limitera to nie jest subtelność: każde żądanie zabierałoby
+     * z kubełka dwa żetony zamiast jednego, więc realny próg byłby połową skonfigurowanego,
+     * a nikt by tego nie zauważył poza użytkownikami odcinanymi w połowie limitu.
+     */
+    @Bean
+    public FilterRegistrationBean<RateLimitFilter> rateLimitFilterRegistration(RateLimitFilter filter) {
+        FilterRegistrationBean<RateLimitFilter> registration = new FilterRegistrationBean<>(filter);
+        registration.setEnabled(false);
+        return registration;
+    }
+
+    @Bean
+    public FilterRegistrationBean<JwtFilter> jwtFilterRegistration(JwtFilter filter) {
+        FilterRegistrationBean<JwtFilter> registration = new FilterRegistrationBean<>(filter);
+        registration.setEnabled(false);
+        return registration;
+    }
+
     /**
      * Ochrona CSRF wariantem "double submit cookie", dostrojonym pod frontend
      * na innej domenie niż API.
@@ -105,7 +141,9 @@ public class SecurityConfig {
     }
 
     @Bean
-    public SecurityFilterChain filterChain(HttpSecurity http, JwtFilter jwtFilter) throws Exception {
+    public SecurityFilterChain filterChain(HttpSecurity http,
+                                           JwtFilter jwtFilter,
+                                           RateLimitFilter rateLimitFilter) throws Exception {
         CsrfTokenRequestAttributeHandler csrfRequestHandler = new CsrfTokenRequestAttributeHandler();
         csrfRequestHandler.setCsrfRequestAttributeName(null);
 
@@ -180,7 +218,18 @@ public class SecurityConfig {
                  * tokenów i omija całą tę ścieżkę, więc tego błędu nie wykryje. Regresję pilnuje
                  * CsrfLifecycleTest, który przechodzi prawdziwą wymianę ciasteczko-nagłówek.
                  */
-                .addFilterBefore(jwtFilter, ExceptionTranslationFilter.class);
+                .addFilterBefore(jwtFilter, ExceptionTranslationFilter.class)
+                /*
+                 * Limiter TUŻ ZA CorsFilter. Wcześniej stał przed całym łańcuchem, więc jego
+                 * odpowiedź 429 nie miała nagłówków CORS i przeglądarka ją blokowała -
+                 * frontend na innym origin widział błąd sieci zamiast komunikatu o limicie.
+                 * Uzasadnienie sensu, komunikat i regresja: RateLimitFilter oraz RateLimitTest.
+                 *
+                 * Nadal przed CsrfFilter i przed uwierzytelnianiem, więc odrzucone żądanie
+                 * kosztuje tyle co nic. Skutek uboczny do świadomego przyjęcia: żądania odrzucone
+                 * przez CSRF również zużywają żetony z kubełka.
+                 */
+                .addFilterAfter(rateLimitFilter, CorsFilter.class);
 
         return http.build();
     }
