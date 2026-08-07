@@ -49,6 +49,31 @@ public class UserService {
         return userRepository.save(user);
     }
 
+    /**
+     * Zakłada konto administratora. Wołane wyłącznie z AdminBootstrap przy starcie.
+     *
+     * Osobna metoda, a nie parametr Role w createConfirmedUser, i to jest tu cała decyzja:
+     * rola nigdy nie pochodzi z danych wejściowych, więc jedyna ścieżka nadająca ADMIN ma
+     * być widoczna po nazwie i nieosiągalna z przepływu rejestracji. Wspólna metoda
+     * z parametrem oznaczałaby, że wystarczy jedno błędne wywołanie w kontrolerze, żeby
+     * rejestracja zaczęła zakładać administratorów.
+     *
+     * Hasło przychodzi ZAHASHOWANE, symetrycznie do createConfirmedUser - inaczej trzeba by
+     * pamiętać, która z dwóch sąsiadujących metod koduje, a która nie.
+     */
+    @Transactional
+    public User createAdmin(String email, String name, String passwordHash) {
+        User admin = new User();
+        admin.setEmail(email);
+        admin.setName(name);
+        admin.setPassword(passwordHash);
+        admin.setRole(Role.ADMIN);
+        // enabled = true od razu: konta technicznego nikt nie potwierdzi klikając w link,
+        // a wiersz z enabled = false jest w tej aplikacji stanem niemożliwym.
+        admin.setEnabled(true);
+        return userRepository.save(admin);
+    }
+
     @Transactional(readOnly = true)
     public boolean existsByEmail(String email) {
         return userRepository.existsByEmail(email);

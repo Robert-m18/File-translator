@@ -84,6 +84,20 @@ app:
     # zabierze wiersz, gdy pierwsza jeszcze czeka na odpowiedź SMTP.
     claim-timeout: 2m
 
+  # Konto administratora zakładane przy starcie. Bez niego rola ADMIN jest nieosiągalna,
+  # a więc /actuator/metrics i /actuator/prometheus są martwe. Szczegóły: AdminBootstrap.
+  admin:
+    # Puste wartości domyślne są CELOWE i nie wolno ich zamienić na "${ADMIN_PASSWORD}"
+    # bez wartości domyślnej w nadziei na szybkie padnięcie startu. Ten idiom (patrz
+    # app.mail.from i jwt.secret) działa tylko dla wartości czytanych przez @Value.
+    # Binding @ConfigurationProperties idzie przez PropertySourcesPlaceholdersResolver,
+    # który tworzy helper z ignoreUnresolvablePlaceholders = true - nieustawiona zmienna
+    # NIE wywala startu, tylko wpisuje do pola literał "${ADMIN_PASSWORD}", bez żadnego
+    # ostrzeżenia. Brakujące dane wyłapuje AdminBootstrap i tylko wtedy, gdy enabled=true.
+    enabled: "${ADMIN_ENABLED:false}"
+    email: "${ADMIN_EMAIL:}"
+    password: "${ADMIN_PASSWORD:}"
+
   # Blokada konta po serii nieudanych logowań - chroni konkretne konto przed
   # zgadywaniem hasła, także gdy próby idą z wielu adresów IP.
   account-lock:

@@ -1,8 +1,9 @@
 # File Translator API
 
 Backend REST API w Spring Boot 4 / Java 21. Docelowo usługa tłumaczenia plików;
-obecnie zaimplementowany jest kompletny moduł uwierzytelniania i zarządzania użytkownikami,
-na którym reszta systemu będzie budowana.
+obecnie zaimplementowany jest kompletny moduł uwierzytelniania — rejestracja z potwierdzeniem
+adresu, logowanie na ciasteczkach, rotacja sesji, blokada konta i reset hasła. Panelu
+administracyjnego ani zarządzania użytkownikami nie ma (patrz sekcja Endpointy).
 
 > Nazwa artefaktu (`file_translator`) i pakiet (`com.example.robert`) pochodzą z pierwotnego
 > szkieletu projektu — ich uporządkowanie jest zaplanowane w etapie refaktoryzacji struktury.
@@ -17,11 +18,11 @@ na którym reszta systemu będzie budowana.
 | Bezpieczeństwo | Spring Security 7, JWT (jjwt), BCrypt |
 | Persystencja | Spring Data JPA / Hibernate, PostgreSQL 17 |
 | Migracje | Liquibase (XML) |
-| Mapowanie DTO | MapStruct |
+| Mapowanie DTO | ręczne — MapStruct usunięty, obsługiwał jeden mapper do nieistniejącego już CRUD-u |
 | Dokumentacja | springdoc-openapi 3 (OpenAPI 3 + Swagger UI) |
 | Obserwowalność | Spring Boot Actuator, Micrometer + Prometheus |
 | Ochrona przed nadużyciami | bucket4j (token bucket), Caffeine lub Redis |
-| Poczta | Spring Mail + Thymeleaf, wysyłka asynchroniczna |
+| Poczta | Spring Mail + Thymeleaf, transakcyjna skrzynka nadawcza (outbox) |
 | Testy | JUnit 5, Mockito, MockMvc, H2, JaCoCo |
 
 ---
@@ -75,7 +76,7 @@ Testy działają na H2 w pamięci (tryb zgodności `MODE=PostgreSQL`) — dział
 jest potrzebna. Schemat budują te same migracje Liquibase co na produkcji, więc `mvn test`
 wykrywa rozjazd encji z migracjami. Job `integration` w CI powtarza cały zestaw na
 prawdziwym PostgreSQL-u i Redisie — tryb zgodności H2 nie odwzorowuje wiernie ani składni
-`FOR NO KEY UPDATE ... SKIP LOCKED`, ani porównań tekstu.
+`FOR NO KEY UPDATE ... SKIP LOCKED`, ani zachowania migracji.
 
 ---
 
@@ -251,20 +252,50 @@ Każdy błąd to `application/problem+json`:
 
 | Metoda | Ścieżka | Dostęp | Opis |
 |---|---|---|---|
-| POST | `/auth/register` | publiczny | Rejestracja, wysyła link aktywacyjny |
-| POST | `/auth/confirm` | publiczny | Potwierdzenie adresu email |
-| POST | `/auth/login` | publiczny | Logowanie, ustawia ciasteczka |
-| POST | `/auth/refresh` | refresh token | Rotacja tokenów |
-| POST | `/auth/logout` | publiczny | Czyszczenie ciasteczek |
-| GET | `/users` | `ROLE_ADMIN` | Lista użytkowników (paginowana) |
-| GET | `/users/{id}` | `ROLE_ADMIN` | Szczegóły użytkownika |
-| POST | `/users/add` | `ROLE_ADMIN` | Utworzenie użytkownika |
-| PUT | `/users/update/{id}` | `ROLE_ADMIN` | Edycja |
-| DELETE | `/users/delete/{id}` | `ROLE_ADMIN` | Usunięcie |
-| GET | `/actuator/health` | publiczny | Health check |
+| GET | `/auth/csrf` | publiczny | Token CSRF w **ciele** odpowiedzi (ciasteczko jest `httpOnly`) |
+| POST | `/auth/register` | publiczny | Rejestracja — zawsze `202`, nigdy nie zdradza, czy adres jest zajęty |
+| POST | `/auth/confirm` | publiczny | Potwierdzenie adresu i utworzenie konta |
+| POST | `/auth/login` | publiczny | Logowanie, ustawia ciasteczka `accessToken` i `refreshToken` |
+| GET | `/auth/me` | **zalogowany** | Dane bieżącego użytkownika — jedyne źródło prawdy o stanie sesji |
+| POST | `/auth/refresh` | refresh token | Rotacja tokenów z wykrywaniem ponownego użycia |
+| POST | `/auth/logout` | publiczny | Unieważnia rodzinę tokenów i czyści ciasteczka |
+| POST | `/auth/forgot-password` | publiczny | Wysyła link resetu — identyczna odpowiedź dla adresu znanego i nieznanego |
+| POST | `/auth/reset-password` | token z maila | Ustawia nowe hasło, unieważnia wszystkie sesje |
+| GET | `/actuator/health`, `/actuator/info` | publiczny | Health check i probe'y dla orkiestratora |
 | GET | `/actuator/metrics`, `/actuator/prometheus` | `ROLE_ADMIN` | Metryki |
 
 Pełna specyfikacja: `/swagger-ui.html` (wyłączone na profilu `prod`).
+
+**`/users/**` nie istnieje.** `UserController` został usunięty razem z CRUD-em, którego nikt nie
+wywoływał. Reguła `/users/** → ROLE_ADMIN` została w `SecurityConfig` celowo: domyślna odmowa
+jest właściwym stanem wyjściowym, więc gdy kontroler wróci, jego endpointy będą chronione od
+pierwszego commitu, a nie dopiero po tym, jak ktoś zauważy, że są otwarte.
+
+### Dostęp administracyjny
+
+Endpointy z kolumną `ROLE_ADMIN` wymagają konta z tą rolą, a rejestracja zakłada wyłącznie
+konta `USER`. Jedyną drogą do roli administratora jest konto zakładane przy starcie aplikacji
+(`AdminBootstrap`), włączane trzema zmiennymi środowiskowymi:
+
+```
+ADMIN_ENABLED=true
+ADMIN_EMAIL=admin@twoja-domena
+ADMIN_PASSWORD=<hasło zgodne z polityką rejestracji>
+```
+
+W `docker-compose.yml` są już ustawione, więc lokalnie konto powstaje samo. Zachowanie:
+
+- konto powstaje raz, od razu włączone (`enabled = true`) — potwierdzenie adresem odpada;
+- **hasło istniejącego konta nie jest nadpisywane** przy kolejnych startach;
+- **istniejące konto z rolą `USER` nie jest podnoszone do `ADMIN`** — pomyłka w adresie nie
+  może oddać cudzego konta. Aplikacja loguje wtedy WARN i nie robi nic;
+- hasło niespełniające polityki rejestracji **zatrzymuje start**, zamiast zakładać słabe konto.
+
+Hasło administratora resetuje się tak samo jak każde inne, przez `/auth/forgot-password`.
+
+**Metryki są osiągalne dla człowieka w przeglądarce, nie dla scrape'a.** Prometheus nie zaloguje
+się ciasteczkiem, więc `GET /actuator/prometheus` bez sesji zwróci mu 401 — to stan oczekiwany,
+uzasadnienie i warunki zmiany w `CLAUDE.md`, sekcja *Accepted trade-offs*.
 
 ---
 
@@ -306,10 +337,12 @@ który został już gdziekolwiek wykonany.
 |---|---|---|
 | 0 | Naprawa fundamentów (Liquibase, ciasteczka, walidacja) | ✅ |
 | 1 | Higiena projektu (Docker, CI, OpenAPI, Actuator, ProblemDetail) | ✅ |
-| 3 | Twardnienie auth (rotacja refresh tokenów, rate limiting, lockout) | ✅ |
 | 2 | Refaktoryzacja struktury (package-by-feature) | ✅ |
 | 2b | Audyt encji (`createdAt`/`updatedAt`), przejście na `Instant` | ⏳ |
-| 4 | Rozszerzenie modelu użytkownika (dostawcy tożsamości, reset hasła) | ⏳ |
+| 3 | Twardnienie auth (rotacja refresh tokenów, rate limiting, lockout) | ✅ |
+| 3b | Reset hasła, skrzynka nadawcza maili, `GET /auth/me`, konto administratora | ✅ |
+| 3c | Migracja bazy na PostgreSQL 17 | ✅ |
+| 4 | Rozszerzenie modelu użytkownika (dostawcy tożsamości) | ⏳ |
 | 5 | Logowanie kodem jednorazowym / magic link | ⏳ |
 | 6 | Logowanie przez Google (OAuth2) | ⏳ |
 | 7 | Testy integracyjne na Testcontainers | ⏳ |

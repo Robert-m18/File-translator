@@ -52,7 +52,12 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info,prometheus
+        # metrics dołożone razem z kontem administratora. Wcześniej wystawione były tylko
+        # health, info i prometheus, więc zalogowany administrator dostawał na /actuator/metrics
+        # 404 (reguła bezpieczeństwa istnieje, endpointu nie ma) - i wyglądało to jak zepsute
+        # konto, a nie jak brak endpointu. Powód ukrywania i tak był pozorny: /actuator/prometheus
+        # wystawia nadzbiór tych samych danych i stoi za tą samą regułą hasRole("ADMIN").
+        include: health,info,metrics,prometheus
   endpoint:
     health:
       show-details: when-authorized

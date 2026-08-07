@@ -93,6 +93,14 @@ services:
       # Zmień na "redis", żeby limity były wspólne dla wszystkich instancji aplikacji
       RATE_LIMIT_STORE: memory
       RATE_LIMIT_REDIS_URL: redis://redis:6379
+      # Konto administratora zakładane przy starcie - bez niego /actuator/metrics
+      # i /actuator/prometheus są nieosiągalne dla nikogo. Hasło jest tu jawne świadomie:
+      # ten plik jest lokalnym środowiskiem deweloperskim i niesie już postgres/postgres do bazy.
+      # Do application-dev.yml to NIE trafia, bo "dev" jest profilem domyślnym - znane hasło
+      # do konta z dostępem do aktuatora dostawałby wtedy każdy ./mvnw spring-boot:run.
+      ADMIN_ENABLED: "true"
+      ADMIN_EMAIL: admin@file-translator.local
+      ADMIN_PASSWORD: LokalnyAdmin1
     healthcheck:
       test: [ "CMD", "wget", "-qO-", "http://localhost:2009/actuator/health" ]
       interval: 10s
