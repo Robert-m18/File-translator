@@ -1,4 +1,4 @@
-# Profil testowy - H2 w pamięci, bez potrzeby stawiania MySQL-a.
+# Profil testowy - H2 w pamięci, bez potrzeby stawiania PostgreSQL-a.
 #
 # Świadomie NIE używamy tu ddl-auto: create-drop. Schemat budują te same migracje
 # Liquibase co na produkcji, a Hibernate je potem weryfikuje (ddl-auto: validate).
@@ -7,12 +7,22 @@
 
 spring:
   datasource:
-    # Bez DATABASE_TO_LOWER: H2 normalizuje niecytowane identyfikatory do wielkich liter,
-    # tak samo jak zakłada Liquibase dla swojej tabeli DATABASECHANGELOG. Wymuszenie
-    # małych liter powodowało, że przy drugim kontekście Springa (baza żyje dłużej niż
-    # pojedynczy kontekst przez DB_CLOSE_DELAY=-1) Liquibase nie znajdował własnej
-    # tabeli śledzącej i próbował utworzyć ją ponownie.
-    url: "jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1;MODE=MySQL"
+    # MODE=PostgreSQL, bo produkcja i dev chodzą na PostgreSQL - tryb zgodności ma
+    # naśladować silnik docelowy, inaczej testy sprawdzają zachowanie, którego nigdzie
+    # nie ma. Zysk konkretny: w MODE=MySQL H2 porównywał teksty bez rozróżniania
+    # wielkości liter, więc testy nie odwzorowywały wyszukiwania po adresie email
+    # (patrz EmailNormalizer). Tu już rozróżnia, tak jak PostgreSQL.
+    #
+    # Bez DATABASE_TO_LOWER, mimo że PostgreSQL składa niecytowane identyfikatory do
+    # MAŁYCH liter: H2 składa je do wielkich i dokładnie tego oczekuje Liquibase dla
+    # swojej tabeli DATABASECHANGELOG. Wymuszenie małych liter kończy się błędem
+    # "unable to create the database changelog table" przy DRUGIM kontekście Springa
+    # (baza żyje dłużej niż kontekst przez DB_CLOSE_DELAY=-1) - sprawdzone przy tej
+    # migracji, padał CsrfLifecycleTest.
+    #
+    # To nadal jest H2 udające PostgreSQL, więc job "integration" w CI zostaje jedynym
+    # miejscem, gdzie migracje i SKIP LOCKED są sprawdzane na prawdziwym silniku.
+    url: "jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1;MODE=PostgreSQL"
     driver-class-name: org.h2.Driver
     username: sa
     password: ""

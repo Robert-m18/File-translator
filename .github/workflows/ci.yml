@@ -54,29 +54,33 @@ jobs:
   # na H2 ma dalej dawać wynik w kilkadziesiąt sekund, bez czekania na kontenery.
   #
   # Co to faktycznie sprawdza, a czego build na H2 sprawdzić nie może:
-  #   - migracje Liquibase na MySQL-u (dropIndex, dropTable, addNotNullConstraint
+  #   - migracje Liquibase na PostgreSQL-u (dropIndex, dropTable, addNotNullConstraint
   #     zachowują się różnie w różnych silnikach, a ddl-auto: validate wykryje
   #     rozjazd encji ze schematem dopiero przy starcie aplikacji);
-  #   - FOR UPDATE SKIP LOCKED w skrzynce nadawczej na prawdziwym MySQL-u;
+  #   - FOR UPDATE SKIP LOCKED w skrzynce nadawczej na prawdziwym PostgreSQL-u;
+  #   - porównania tekstu Z ROZRÓŻNIANIEM wielkości liter, czego H2 w trybie
+  #     zgodności nie odwzorowuje wiernie - a od tego zależy wyszukiwanie po adresie
+  #     email (patrz EmailNormalizer);
   #   - RedisBucketProvider, czyli jedyną gałąź limitera, która na profilu testowym
   #     nigdy się nie wykonywała.
   integration:
-    name: Testy na MySQL i Redisie
+    name: Testy na PostgreSQL i Redisie
     runs-on: ubuntu-latest
 
     services:
       # Wersje takie same jak w docker-compose.yml - CI ma sprawdzać to, co lokalnie.
-      mysql:
-        image: mysql:8.4
+      postgres:
+        image: postgres:17-alpine
         env:
-          MYSQL_ROOT_PASSWORD: root
-          MYSQL_DATABASE: userapitest
+          POSTGRES_DB: userapitest
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
         ports:
-          - 3306:3306
+          - 5432:5432
         # Bez health checka job ruszyłby, zanim baza przyjmuje połączenia - kontener
-        # wstaje w sekundę, ale MySQL inicjuje katalog danych kilkanaście sekund dłużej.
+        # wstaje w sekundę, ale inicjacja katalogu danych trwa dłużej.
         options: >-
-          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-cmd="pg_isready -U postgres -d userapitest"
           --health-interval=5s
           --health-timeout=5s
           --health-retries=20
@@ -100,19 +104,19 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
-      - name: Test against MySQL and Redis
+      - name: Test against PostgreSQL and Redis
         # Przez zmienne środowiskowe, a NIE przez osobny profil testowy: profil trzeba by
         # aktywować w każdej klasie testowej (@ActiveProfiles("test") jest wpisane na sztywno),
         # a drugi plik z konfiguracją rozjeżdżałby się z pierwszym przy każdej zmianie.
         # Zmienne środowiskowe stoją w kolejności pierwszeństwa Springa WYŻEJ niż
         # application-test.yml, więc podmieniają tylko to, co ma być inne, i dziedziczą resztę.
         env:
-          SPRING_DATASOURCE_URL: jdbc:mysql://127.0.0.1:3306/userapitest
-          SPRING_DATASOURCE_USERNAME: root
-          SPRING_DATASOURCE_PASSWORD: root
+          SPRING_DATASOURCE_URL: jdbc:postgresql://127.0.0.1:5432/userapitest
+          SPRING_DATASOURCE_USERNAME: postgres
+          SPRING_DATASOURCE_PASSWORD: postgres
           # Jawnie, bo application-test.yml wskazuje sterownik H2 - sama zmiana URL-a
           # zostawiłaby ustawiony org.h2.Driver.
-          SPRING_DATASOURCE_DRIVER_CLASS_NAME: com.mysql.cj.jdbc.Driver
+          SPRING_DATASOURCE_DRIVER_CLASS_NAME: org.postgresql.Driver
           # RedisBucketProvider łączy się w konstruktorze, więc samo podniesienie kontekstu
           # sprawdza konfigurację połączenia; RateLimitTest sprawdza potem liczenie kubełków.
           APP_RATE_LIMIT_STORE: redis
@@ -123,7 +127,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: surefire-reports-mysql
+          name: surefire-reports-postgres
           path: target/surefire-reports/
           if-no-files-found: warn
 

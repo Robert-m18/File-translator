@@ -36,10 +36,15 @@ public interface OutboxMessageRepository extends JpaRepository<OutboxMessage, Lo
      * z SMTP toczy się długo po jej zwolnieniu - blokady bazodanowe nigdy nie obejmują
      * operacji zewnętrznej.
      *
-     * H2 2.4 (testy) obsługuje SKIP LOCKED tak samo jak MySQL - sprawdzone na dwóch
-     * połączeniach, nie tylko składniowo. Gdyby to się kiedyś rozjechało, byłby to rozjazd
-     * między testami a produkcją dotyczący współbieżności, czyli najgorszy z możliwych;
-     * dlatego jest to warunek utrzymania tej wersji H2.
+     * Na PostgreSQL Hibernate emituje "... for no key update of m skip locked". FOR NO KEY
+     * UPDATE to słabsza blokada niż FOR UPDATE, ale nadal koliduje z innymi blokadami zapisu
+     * na tym samym wierszu, więc rozłączność odczytów - jedyna własność, na której nam tu
+     * zależy - trzyma się bez zmian.
+     *
+     * H2 2.4 (testy) obsługuje SKIP LOCKED tak samo - sprawdzone na dwóch połączeniach,
+     * nie tylko składniowo. Gdyby to się kiedyś rozjechało, byłby to rozjazd między testami
+     * a produkcją dotyczący współbieżności, czyli najgorszy z możliwych; dlatego jest to
+     * warunek utrzymania tej wersji H2.
      */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "-2")) // org.hibernate.Timeouts.SKIP_LOCKED

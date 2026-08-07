@@ -4,6 +4,7 @@
  */
 package com.example.robert.user.dto;
 
+import com.example.robert.common.validation.EmailNormalizer;
 import com.example.robert.common.validation.ValidEmail;
 import com.example.robert.common.validation.ValidPassword;
 import jakarta.validation.constraints.NotBlank;
@@ -31,4 +32,14 @@ public record UserRequestDTO(
         @ValidPassword
         String password
 
-) {}
+) {
+    /*
+     * Postać kanoniczna adresu już na granicy aplikacji - patrz EmailNormalizer.
+     * Tu ma to dodatkowe znaczenie: adres z tego DTO trafia do poczekalni rejestracji
+     * i stamtąd wprost do kolumny users.email, więc to on decyduje, w jakiej postaci
+     * adres wyląduje w bazie i czy unikat uk_users_email faktycznie działa.
+     */
+    public UserRequestDTO {
+        email = EmailNormalizer.normalize(email);
+    }
+}

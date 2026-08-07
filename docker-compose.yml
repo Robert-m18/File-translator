@@ -1,30 +1,37 @@
 # Kompletne środowisko deweloperskie: `docker compose up -d`
 #
 # Sens tego pliku: nowa osoba (albo ja na innym komputerze) uruchamia projekt
-# jedną komendą, bez ręcznego instalowania MySQL-a i konfigurowania konta SMTP.
+# jedną komendą, bez ręcznego instalowania PostgreSQL-a i konfigurowania konta SMTP.
 
 services:
 
-  mysql:
-    image: mysql:8.4
-    container_name: ft-mysql
+  postgres:
+    image: postgres:17-alpine
+    container_name: ft-postgres
     environment:
-      MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: userapitest
+      POSTGRES_DB: userapitest
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
     ports:
-      # Na hoście 3307, w kontenerze 3306. Aplikacja łączy się siecią Compose'a
-      # (host "mysql", port 3306), więc mapowanie jest wyłącznie dla narzędzi
-      # uruchamianych na hoście. 3306 zostawiamy wolne celowo: na maszynach
-      # deweloperskich stoi tam zwykle lokalny MySQL albo MariaDB i kolizja
-      # portu wywalałaby `docker compose up` zamiast czegokolwiek uruchomić.
-      - "3307:3306"
+      # Na hoście 5433, w kontenerze 5432. Aplikacja łączy się siecią Compose'a
+      # (host "postgres", port 5432), więc mapowanie jest wyłącznie dla narzędzi
+      # uruchamianych na hoście - DBeaver, psql, HeidiSQL.
+      #
+      # 5432 zostawiamy wolne CELOWO i to nie jest ostrożność na wyrost: na tej
+      # maszynie stoi tam już inny PostgreSQL. Zajęcie domyślnego portu albo
+      # wywaliłoby `docker compose up`, albo - gorzej - narzędzie na hoście
+      # połączyłoby się z cudzym serwerem, myśląc że ogląda bazę projektu.
+      # Dokładnie tak wyglądała wcześniejsza pułapka z MariaDB na 3306.
+      - "5433:5432"
     volumes:
-      - mysql-data:/var/lib/mysql
+      - postgres-data:/var/lib/postgresql/data
     healthcheck:
       # Aplikacja musi poczekać, aż baza faktycznie przyjmuje połączenia.
       # Sam fakt, że kontener wystartował, tego nie oznacza - stąd healthcheck
       # i depends_on: condition: service_healthy poniżej.
-      test: [ "CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot" ]
+      # -U i -d muszą się zgadzać z POSTGRES_USER/DB: pg_isready bez nich pyta
+      # o bazę o nazwie użytkownika systemowego i zwraca "no response".
+      test: [ "CMD-SHELL", "pg_isready -U postgres -d userapitest" ]
       interval: 5s
       timeout: 5s
       retries: 20
@@ -61,7 +68,7 @@ services:
       context: .
     container_name: ft-app
     depends_on:
-      mysql:
+      postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -70,11 +77,12 @@ services:
     environment:
       SPRING_PROFILES_ACTIVE: dev
       SERVER_PORT: 2009
-      # Host "mysql" to nazwa usługi w sieci Compose'a, nie localhost -
-      # z wnętrza kontenera localhost oznacza sam kontener aplikacji.
-      DATABASE_URL: jdbc:mysql://mysql:3306/userapitest
-      DATABASE_USER: root
-      DATABASE_PASSWORD: root
+      # Host "postgres" to nazwa usługi w sieci Compose'a, nie localhost -
+      # z wnętrza kontenera localhost oznacza sam kontener aplikacji. Port 5432,
+      # czyli wewnętrzny port kontenera bazy, a nie 5433 z mapowania na hoście.
+      DATABASE_URL: jdbc:postgresql://postgres:5432/userapitest
+      DATABASE_USER: postgres
+      DATABASE_PASSWORD: postgres
       MAIL_HOST: mailpit
       MAIL_PORT: 1025
       MAIL_SMTP_AUTH: "false"
@@ -93,4 +101,4 @@ services:
       start_period: 60s
 
 volumes:
-  mysql-data:
+  postgres-data:

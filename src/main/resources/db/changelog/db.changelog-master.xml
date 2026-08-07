@@ -8,12 +8,17 @@
     <!--
         Typy różniące się między silnikami baz danych.
         Dzięki temu ten sam changelog tworzy schemat zgodny z tym, czego oczekuje
-        Hibernate (ddl-auto: validate) zarówno na MySQL (prod/dev), jak i na H2 (testy).
+        Hibernate (ddl-auto: validate) zarówno na PostgreSQL (prod/dev), jak i na H2 (testy).
+
+        PostgreSQL i H2 mają tu identyczne wartości, więc dzielą jeden wpis. Warianty
+        MySQL-a zostają, bo changesety 0001-0005 wykonały się już na tym silniku
+        i muszą dawać ten sam wynik przy odtworzeniu historii - changesetu, który
+        gdziekolwiek przeszedł, nie wolno zmieniać wstecz.
     -->
+    <property name="type.datetime" value="TIMESTAMP(6)" dbms="postgresql,h2"/>
+    <property name="type.boolean"  value="BOOLEAN"      dbms="postgresql,h2"/>
     <property name="type.datetime" value="DATETIME(6)"  dbms="mysql,mariadb"/>
-    <property name="type.datetime" value="TIMESTAMP(6)" dbms="h2"/>
     <property name="type.boolean"  value="BIT(1)"       dbms="mysql,mariadb"/>
-    <property name="type.boolean"  value="BOOLEAN"      dbms="h2"/>
 
     <!-- Każda zmiana schematu = nowy plik dołączony poniżej. Nigdy nie edytujemy już wykonanych changesetów. -->
     <include file="db/changelog/changes/0001-init-schema.xml"/>

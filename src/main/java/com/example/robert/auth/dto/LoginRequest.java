@@ -4,6 +4,7 @@
  */
 package com.example.robert.auth.dto;
 
+import com.example.robert.common.validation.EmailNormalizer;
 import com.example.robert.common.validation.ValidEmail;
 import jakarta.validation.constraints.NotBlank;
 
@@ -21,4 +22,14 @@ public record LoginRequest(
 		 */
 		@NotBlank(message = "Hasło nie może być puste")
 		String password
-) {}
+) {
+	/*
+	 * Normalizacja adresu na granicy aplikacji - patrz EmailNormalizer. Konstruktor
+	 * kompaktowy wykonuje się także przy deserializacji z JSON-a, więc wszystko poniżej
+	 * (AuthenticationManager, UserDetailsService, zdarzenia logowania, licznik blokady)
+	 * widzi już jedną, kanoniczną postać adresu.
+	 */
+	public LoginRequest {
+		email = EmailNormalizer.normalize(email);
+	}
+}

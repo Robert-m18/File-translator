@@ -15,7 +15,7 @@ na którym reszta systemu będzie budowana.
 |---|---|
 | Runtime | Java 21, Spring Boot 4.0.6 |
 | Bezpieczeństwo | Spring Security 7, JWT (jjwt), BCrypt |
-| Persystencja | Spring Data JPA / Hibernate, MySQL 8.4 |
+| Persystencja | Spring Data JPA / Hibernate, PostgreSQL 17 |
 | Migracje | Liquibase (XML) |
 | Mapowanie DTO | MapStruct |
 | Dokumentacja | springdoc-openapi 3 (OpenAPI 3 + Swagger UI) |
@@ -30,7 +30,7 @@ na którym reszta systemu będzie budowana.
 
 ### Docker Compose (zalecane)
 
-Podnosi MySQL, lokalny serwer SMTP i aplikację:
+Podnosi PostgreSQL, lokalny serwer SMTP i aplikację:
 
 ```bash
 docker compose up -d
@@ -42,12 +42,18 @@ docker compose up -d
 | Swagger UI | http://localhost:2009/swagger-ui.html |
 | Health check | http://localhost:2009/actuator/health |
 | Skrzynka pocztowa (Mailpit) | http://localhost:8025 |
+| Baza (DBeaver/psql) | `localhost:5433`, baza `userapitest`, `postgres`/`postgres` |
 
 Maile weryfikacyjne nie wychodzą na zewnątrz — lądują w Mailpicie pod adresem powyżej.
 
+**Port bazy to 5433, nie 5432.** Domyślny port zostawiamy wolny, bo na maszynach
+deweloperskich stoi tam zwykle lokalnie zainstalowany PostgreSQL — zajęcie go albo wywala
+`docker compose up`, albo cicho podłącza narzędzia do cudzego serwera.
+
 ### Uruchomienie lokalne
 
-Wymaga działającego MySQL-a z bazą `userapitest`:
+Wymaga bazy z Compose'a (`docker compose up -d postgres`). Konfiguracja domyślna celuje
+w `localhost:5433` i w Mailpita na `localhost:1025`, więc nie trzeba ustawiać niczego:
 
 ```bash
 ./mvnw spring-boot:run
@@ -65,8 +71,11 @@ i **nie** modyfikuje schematu.
 ./mvnw test -Dtest=AuthServiceTest#login_shouldReturnTokenPair
 ```
 
-Testy działają na H2 w pamięci — MySQL nie jest potrzebny. Schemat budują te same
-migracje Liquibase co na produkcji, więc `mvn test` wykrywa rozjazd encji z migracjami.
+Testy działają na H2 w pamięci (tryb zgodności `MODE=PostgreSQL`) — działająca baza nie
+jest potrzebna. Schemat budują te same migracje Liquibase co na produkcji, więc `mvn test`
+wykrywa rozjazd encji z migracjami. Job `integration` w CI powtarza cały zestaw na
+prawdziwym PostgreSQL-u i Redisie — tryb zgodności H2 nie odwzorowuje wiernie ani składni
+`FOR NO KEY UPDATE ... SKIP LOCKED`, ani porównań tekstu.
 
 ---
 
@@ -263,7 +272,7 @@ Pełna specyfikacja: `/swagger-ui.html` (wyłączone na profilu `prod`).
 
 | Profil | Baza | Sekrety | Swagger |
 |---|---|---|---|
-| `dev` (domyślny) | lokalny MySQL | wartości domyślne w pliku | włączony |
+| `dev` (domyślny) | PostgreSQL z Compose'a (`localhost:5433`) | wartości domyślne w pliku | włączony |
 | `prod` | z `DATABASE_*` | wyłącznie ze zmiennych środowiskowych | wyłączony |
 | `test` | H2 w pamięci | w pliku testowym | — |
 

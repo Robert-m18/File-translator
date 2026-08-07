@@ -137,7 +137,8 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     /**
      * Nazwa naruszonego więzu, a NIE komunikat sterownika.
      *
-     * Komunikat MySQL-a niesie wartość, która kolizję wywołała:
+     * Komunikat sterownika niesie wartość, która kolizję wywołała, i dotyczy to każdego
+     * silnika: PostgreSQL pisze "Key (email)=(ktos@example.com) already exists", MySQL pisał
      * "Duplicate entry 'ktos@example.com' for key 'users.email'". Najczęstszym wyzwalaczem
      * tego handlera jest właśnie wyścig przy rejestracji na ten sam adres, więc logowanie
      * komunikatu wprost wpisywałoby adresy użytkowników do logu produkcyjnego - poziom WARN

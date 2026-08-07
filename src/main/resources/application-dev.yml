@@ -1,24 +1,38 @@
-# Profil deweloperski - lokalny MySQL + Mailpit/Mailtrap.
+# Profil deweloperski - PostgreSQL z docker-compose + Mailpit/Mailtrap.
 # Wszystko tutaj jest jawne i nadpisywalne zmiennymi środowiskowymi (patrz docker-compose.yml).
 
 spring:
   datasource:
-    url: "${DATABASE_URL:jdbc:mysql://localhost:3306/userapitest}"
-    username: "${DATABASE_USER:root}"
-    password: "${DATABASE_PASSWORD:}"
+    # Port 5433, czyli baza z docker-compose widziana z hosta. NIE 5432: tam stoi
+    # zwykle lokalnie zainstalowany PostgreSQL i połączylibyśmy się po cichu z nim.
+    url: "${DATABASE_URL:jdbc:postgresql://localhost:5433/userapitest}"
+    username: "${DATABASE_USER:postgres}"
+    password: "${DATABASE_PASSWORD:postgres}"
   jpa:
     show-sql: true
+  # Domyślnie Mailpit z docker-compose (localhost:1025), a NIE zewnętrzny Mailtrap.
+  #
+  # Poprzednie wartości domyślne celowały w sandbox.smtp.mailtrap.io z atrapą poświadczeń
+  # "dev_test_user"/"dev_test_pass", więc `./mvnw spring-boot:run` startował bez błędu,
+  # przyjmował rejestrację i zwracał 202 - a mail nigdy nie wychodził, bo serwer odrzucał
+  # uwierzytelnienie. Objaw był niewidoczny z poziomu API: rejestracji nie dało się
+  # potwierdzić, czyli nie dało się zalogować, a jedyny ślad leciał do logu OutboxPublishera.
+  #
+  # Zmienne środowiskowe nazwane jak na profilu prod (MAIL_USERNAME/MAIL_PASSWORD), żeby
+  # przełączenie deva na prawdziwego dostawcę nie wymagało zgadywania innego zestawu nazw.
   mail:
-    host: "${MAIL_HOST:sandbox.smtp.mailtrap.io}"
-    port: "${MAIL_PORT:2525}"
-    username: "${MAILTRAP_USERNAME:dev_test_user}"
-    password: "${MAILTRAP_PASSWORD:dev_test_pass}"
+    host: "${MAIL_HOST:localhost}"
+    port: "${MAIL_PORT:1025}"
+    username: "${MAIL_USERNAME:}"
+    password: "${MAIL_PASSWORD:}"
     properties:
       mail:
         smtp:
-          auth: "${MAIL_SMTP_AUTH:true}"
+          # Mailpit nie wymaga uwierzytelnienia ani TLS. Przy zewnętrznym dostawcy
+          # podnieść oba przez zmienne środowiskowe razem z MAIL_USERNAME/MAIL_PASSWORD.
+          auth: "${MAIL_SMTP_AUTH:false}"
           starttls:
-            enable: "${MAIL_SMTP_STARTTLS:true}"
+            enable: "${MAIL_SMTP_STARTTLS:false}"
 
 jwt:
   # Sekret wyłącznie na dev - NIGDY nie używać na produkcji (tam wymuszony przez env JWT_SECRET).

@@ -15,9 +15,12 @@ spring:
       pool:
         size: 2
   datasource:
-    url: "${DATABASE_URL:jdbc:mysql://localhost:3306/userapitest}"
-    username: "${DATABASE_USER:root}"
-    password: "${DATABASE_PASSWORD:}"
+    # Domyślnie celuje w bazę z docker-compose (host 5433), a NIE w domyślny port
+    # 5432. Na maszynach deweloperskich stoi tam zwykle inny, lokalnie zainstalowany
+    # PostgreSQL - celowanie w 5432 oznaczałoby ciche łączenie się z cudzą bazą.
+    url: "${DATABASE_URL:jdbc:postgresql://localhost:5433/userapitest}"
+    username: "${DATABASE_USER:postgres}"
+    password: "${DATABASE_PASSWORD:postgres}"
   jpa:
     hibernate:
       # Schemat tworzy WYŁĄCZNIE Liquibase. Hibernate ma go tylko zweryfikować
