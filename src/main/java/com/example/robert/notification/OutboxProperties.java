@@ -52,6 +52,26 @@ public record OutboxProperties(
          * wyraźnie dłuższe niż realny czas wysyłki maila, inaczej druga instancja
          * zabrałaby ten sam wiersz, gdy pierwsza jeszcze czeka na SMTP.
          */
-        @NotNull Duration claimTimeout
+        @NotNull Duration claimTimeout,
+
+        /**
+         * Jak długo trzymamy wysłane wiadomości, licząc od chwili wysłania.
+         *
+         * Nie chodzi o rozmiar tabeli - indeks (status, next_retry_at) trzyma zapytanie
+         * rezerwujące selektywnym niezależnie od tego, ile SENT-ów się nazbiera. Chodzi
+         * o to, CO leży w tych wierszach: payload niesie SUROWY token weryfikacyjny albo
+         * resetu hasła, a recipient adres email. Tabela zgłoszeń rejestracji trzyma tylko
+         * SHA-256 tokenu właśnie po to, żeby odczyt bazy nie dawał użytecznego sekretu -
+         * wysłany wiersz outboxu trzymany bezterminowo znosi sens tego hashowania.
+         *
+         * Doba jest wartością wyprowadzoną, nie zgadniętą: token rejestracji jest ważny
+         * 24 h (najdłuższy z naszych; reset hasła to 1 h), więc po tym czasie payload
+         * nie niesie już nic, czym można się posłużyć. Trzymanie wiersza dłużej wydłuża
+         * wyłącznie okno ekspozycji plaintextu.
+         *
+         * Podnoszenie tego wymaga świadomej decyzji o retencji sekretów, a nie samego
+         * "przydałaby się dłuższa historia wysyłek" - do historii służy log.
+         */
+        @NotNull Duration retention
 ) {
 }

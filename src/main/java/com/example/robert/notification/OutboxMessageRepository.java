@@ -120,4 +120,24 @@ public interface OutboxMessageRepository extends JpaRepository<OutboxMessage, Lo
             where m.status = com.example.robert.notification.model.OutboxMessage$Status.FAILED
             """)
     long countFailed();
+
+    /**
+     * Usuwa wysłane wiadomości starsze niż podany moment.
+     *
+     * Kasujemy WYŁĄCZNIE status SENT. FAILED zostaje i to nie jest przeoczenie: countFailed()
+     * jest jedyną odpowiedzią na pytanie "czy maile w ogóle wychodzą", więc sprzątaczka
+     * zabierająca FAILED wyzerowałaby ten sygnał i awaria dostarczania wyglądałaby jak cisza.
+     * NEW też zostaje - to wiadomości jeszcze w obiegu, czekające na próbę albo na backoff.
+     *
+     * Odliczamy od sentAt, nie od createdAt: retencja dotyczy czasu, jaki minął od wysłania.
+     * Wiersz o statusie SENT ma sentAt zawsze ustawione - markSent nadaje jedno i drugie
+     * w tym samym UPDATE.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            delete from OutboxMessage m
+            where m.status = com.example.robert.notification.model.OutboxMessage$Status.SENT
+              and m.sentAt < :cutoff
+            """)
+    int deleteSentBefore(@Param("cutoff") LocalDateTime cutoff);
 }
