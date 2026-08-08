@@ -9,11 +9,12 @@ spring:
     active: "${SPRING_PROFILES_ACTIVE:dev}"
   task:
     scheduling:
-      # Domyślnie harmonogram ma JEDEN wątek, a mamy dwa zadania: nocne sprzątanie
-      # i wysyłkę ze skrzynki nadawczej co 10 s. Przy jednym wątku długie sprzątanie
-      # wstrzymywałoby wysyłkę maili.
+      # Domyślnie harmonogram ma JEDEN wątek, a mamy trzy zadania: nocne sprzątanie
+      # tokenów, nocne sprzątanie skrzynki nadawczej i wysyłkę maili co 10 s. Przy jednym
+      # wątku długie sprzątanie wstrzymywałoby wysyłkę. Rośnie razem z liczbą zadań
+      # @Scheduled - dokładając czwarte, podnieś i to.
       pool:
-        size: 2
+        size: 3
   datasource:
     # Domyślnie celuje w bazę z docker-compose (host 5433), a NIE w domyślny port
     # 5432. Na maszynach deweloperskich stoi tam zwykle inny, lokalnie zainstalowany
@@ -83,6 +84,12 @@ app:
     # Musi być wyraźnie dłuższe niż realny czas wysyłki, inaczej druga instancja
     # zabierze wiersz, gdy pierwsza jeszcze czeka na odpowiedź SMTP.
     claim-timeout: 2m
+    # Po tym czasie od wysłania wiersz jest usuwany (OutboxCleanupJob, co noc o 3:10).
+    # Doba, bo tyle wynosi ważność tokenu rejestracji - najdłuższego z tych, które lądują
+    # w payloadzie. Później payload nie niesie już użytecznego sekretu, a trzymany dłużej
+    # jest tylko plaintextowym tokenem i adresem email bez terminu ważności.
+    # Kasowane są WYŁĄCZNIE wiersze SENT: FAILED zostaje, bo na nim stoi countFailed().
+    retention: 1d
 
   # Konto administratora zakładane przy starcie. Bez niego rola ADMIN jest nieosiągalna,
   # a więc /actuator/metrics i /actuator/prometheus są martwe. Szczegóły: AdminBootstrap.
