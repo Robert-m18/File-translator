@@ -146,9 +146,26 @@ public class AuthService {
      */
     @Transactional
     public void confirmEmail(String rawToken) {
+        /*
+         * Nieznany token to DWA nieodróżnialne przypadki: token zmyślony albo token, który
+         * chwilę temu zadziałał. Potwierdzenie kasuje wszystkie zgłoszenia na dany adres
+         * (patrz niżej), więc udany link jest po użyciu dokładnie tak samo nieznany jak
+         * podrobiony. Najczęstszym wyzwalaczem jest zwykłe odświeżenie strony potwierdzenia,
+         * czyli sytuacja, w której wszystko poszło DOBRZE - dlatego komunikat wymienia obie
+         * możliwości, zamiast wybierać tę gorszą i straszyć użytkownika awarią. Reset hasła
+         * ma ten sam komunikat, ale tam stany da się odróżnić, bo used_at zostaje w tabeli
+         * do wygaśnięcia.
+         *
+         * Czego serwer powiedzieć NIE MOŻE: "konto jest aktywne, zaloguj się". Dla linku
+         * wygasłego albo zmyślonego byłoby to nieprawdą i odesłałoby użytkownika do konta,
+         * które nie istnieje. Ten komunikat należy do frontu - on jeden wie, że jego własne
+         * potwierdzenie właśnie się udało, i dlatego po sukcesie zdejmuje token z adresu.
+         */
         PendingRegistration pending = pendingRegistrationRepository
                 .findByTokenHash(TokenHasher.sha256Hex(rawToken))
-                .orElseThrow(() -> new InvalidTokenException("Nieprawidłowy token potwierdzający"));
+                .orElseThrow(() -> new InvalidTokenException(
+                        "Link jest nieprawidłowy albo został już wykorzystany"
+                                + " - jeśli potwierdzałeś to konto wcześniej, spróbuj się zalogować"));
 
         if (pending.isExpired()) {
             throw new TokenExpiredException("Token wygasł - zarejestruj się ponownie");
