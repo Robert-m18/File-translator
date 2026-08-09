@@ -27,7 +27,8 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.LocalDateTime;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -39,14 +40,14 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class AuthService {
 
-    private static final long REGISTRATION_VALIDITY_HOURS = 24;
+    private static final Duration REGISTRATION_VALIDITY = Duration.ofHours(24);
 
     /**
      * Link do resetu hasła żyje krótko - godzinę, nie dobę jak link rejestracyjny.
      * Różnica jest celowa: token resetu jest pełnym kluczem do istniejącego konta,
      * a token rejestracyjny tylko aktywuje konto, którego jeszcze nie ma.
      */
-    private static final long PASSWORD_RESET_VALIDITY_HOURS = 1;
+    private static final Duration PASSWORD_RESET_VALIDITY = Duration.ofHours(1);
 
     private final AuthenticationManager authenticationManager;
     private final JwtUtil jwtUtil;
@@ -123,7 +124,7 @@ public class AuthService {
          * w klikniętym linku, więc obce zgłoszenia leżą obok i wygasają nieużyte.
          */
         String rawToken = UUID.randomUUID().toString();
-        LocalDateTime now = LocalDateTime.now();
+        Instant now = Instant.now();
 
         pendingRegistrationRepository.save(new PendingRegistration(
                 dto.email(),
@@ -131,7 +132,7 @@ public class AuthService {
                 passwordEncoder.encode(dto.password()),
                 TokenHasher.sha256Hex(rawToken),
                 now,
-                now.plusHours(REGISTRATION_VALIDITY_HOURS)
+                now.plus(REGISTRATION_VALIDITY)
         ));
 
         // Zamówienie maila trafia do skrzynki nadawczej w TEJ SAMEJ transakcji co zgłoszenie.
@@ -210,7 +211,7 @@ public class AuthService {
         }
 
         User user = found.get();
-        LocalDateTime now = LocalDateTime.now();
+        Instant now = Instant.now();
 
         // W obiegu ma być najwyżej jeden żywy link. Bez tego seria żądań zostawia stos
         // ważnych tokenów, a każdy z nich jest pełnym kluczem do konta.
@@ -221,7 +222,7 @@ public class AuthService {
                 TokenHasher.sha256Hex(rawToken),
                 user,
                 now,
-                now.plusHours(PASSWORD_RESET_VALIDITY_HOURS)
+                now.plus(PASSWORD_RESET_VALIDITY)
         ));
 
         mailOutbox.enqueuePasswordReset(user.getEmail(), user.getName(), rawToken);
@@ -250,7 +251,7 @@ public class AuthService {
 
         User user = token.getUser();
         userService.updatePassword(user, passwordEncoder.encode(newPassword));
-        token.setUsedAt(LocalDateTime.now()); // encja zarządzana - dirty checking zapisze zmianę
+        token.setUsedAt(Instant.now()); // encja zarządzana - dirty checking zapisze zmianę
 
         /*
          * Reset hasła MUSI zerwać istniejące sesje. Jeśli powodem resetu było przejęcie

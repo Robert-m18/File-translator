@@ -20,11 +20,22 @@
     <property name="type.datetime" value="DATETIME(6)"  dbms="mysql,mariadb"/>
     <property name="type.boolean"  value="BIT(1)"       dbms="mysql,mariadb"/>
 
+    <!--
+        type.datetime jest typem HISTORYCZNYM - zostaje wyłącznie dlatego, że changesety 0001-0005
+        już się nim wykonały i muszą dawać ten sam wynik przy odtworzeniu historii. Changeset 0006
+        przestawia wszystkie te kolumny na TIMESTAMP(6) WITH TIME ZONE.
+
+        NOWE kolumny czasowe zakładaj od razu jako ${type.timestamptz} - kolumna bez strefy trzyma
+        gołą ścianę zegara i nie mówi, czyj to zegar; wyjaśnienie w komentarzu changesetu 0006.
+    -->
+    <property name="type.timestamptz" value="TIMESTAMP(6) WITH TIME ZONE" dbms="postgresql,h2"/>
+
     <!-- Każda zmiana schematu = nowy plik dołączony poniżej. Nigdy nie edytujemy już wykonanych changesetów. -->
     <include file="db/changelog/changes/0001-init-schema.xml"/>
     <include file="db/changelog/changes/0002-refresh-tokens-and-account-lockout.xml"/>
     <include file="db/changelog/changes/0003-unconfirmed-account-cleanup.xml"/>
     <include file="db/changelog/changes/0004-pending-registrations-and-password-reset.xml"/>
     <include file="db/changelog/changes/0005-mail-outbox.xml"/>
+    <include file="db/changelog/changes/0006-timestamps-with-time-zone.xml"/>
 
 </databaseChangeLog>

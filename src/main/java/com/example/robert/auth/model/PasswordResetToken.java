@@ -11,7 +11,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 /**
  * Jednorazowy token do ustawienia nowego hasła.
@@ -41,16 +41,16 @@ public class PasswordResetToken {
     private User user;
 
     @Column(name = "created_at", nullable = false)
-    private LocalDateTime createdAt;
+    private Instant createdAt;
 
     @Column(name = "expires_at", nullable = false)
-    private LocalDateTime expiresAt;
+    private Instant expiresAt;
 
     /** NULL = token niewykorzystany. */
     @Column(name = "used_at")
-    private LocalDateTime usedAt;
+    private Instant usedAt;
 
-    public PasswordResetToken(String tokenHash, User user, LocalDateTime createdAt, LocalDateTime expiresAt) {
+    public PasswordResetToken(String tokenHash, User user, Instant createdAt, Instant expiresAt) {
         this.tokenHash = tokenHash;
         this.user = user;
         this.createdAt = createdAt;
@@ -62,6 +62,6 @@ public class PasswordResetToken {
     }
 
     public boolean isExpired() {
-        return expiresAt.isBefore(LocalDateTime.now());
+        return expiresAt.isBefore(Instant.now());
     }
 }

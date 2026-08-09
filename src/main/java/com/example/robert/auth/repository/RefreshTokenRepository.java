@@ -11,7 +11,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.Optional;
 
 @Repository
@@ -25,7 +25,7 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, Long
      */
     @Modifying
     @Query("update RefreshToken t set t.revokedAt = :now where t.familyId = :familyId and t.revokedAt is null")
-    int revokeFamily(@Param("familyId") String familyId, @Param("now") LocalDateTime now);
+    int revokeFamily(@Param("familyId") String familyId, @Param("now") Instant now);
 
     /**
      * Unieważnia WSZYSTKIE sesje użytkownika, niezależnie od rodziny i urządzenia.
@@ -36,10 +36,10 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, Long
      */
     @Modifying
     @Query("update RefreshToken t set t.revokedAt = :now where t.user.id = :userId and t.revokedAt is null")
-    int revokeAllForUser(@Param("userId") Long userId, @Param("now") LocalDateTime now);
+    int revokeAllForUser(@Param("userId") Long userId, @Param("now") Instant now);
 
     /** Sprzątanie po wygasłych tokenach - i tak nie da się ich już użyć. */
     @Modifying
     @Query("delete from RefreshToken t where t.expiresAt < :now")
-    int deleteAllExpired(@Param("now") LocalDateTime now);
+    int deleteAllExpired(@Param("now") Instant now);
 }

@@ -12,7 +12,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 /**
  * Liczy nieudane próby logowania i blokuje konto po przekroczeniu progu.
@@ -51,7 +51,7 @@ public class LoginAttemptService {
         // Najpierw sprzątamy po blokadzie, która już wygasła. Inaczej licznik zostaje
         // na progu z poprzedniej serii i ta jedna próba blokuje konto od razu -
         // szczegóły przy UserRepository.clearExpiredLock.
-        userRepository.clearExpiredLock(email, LocalDateTime.now());
+        userRepository.clearExpiredLock(email, Instant.now());
 
         int updated = userRepository.incrementFailedLoginAttempts(email);
         if (updated == 0) {
@@ -62,7 +62,7 @@ public class LoginAttemptService {
 
         int attempts = userRepository.findFailedLoginAttempts(email).orElse(0);
         if (attempts >= properties.maxAttempts()) {
-            userRepository.lockAccountUntil(email, LocalDateTime.now().plus(properties.lockDuration()));
+            userRepository.lockAccountUntil(email, Instant.now().plus(properties.lockDuration()));
             log.warn("Konto zablokowane na {} po {} nieudanych próbach logowania",
                     properties.lockDuration(), attempts);
         }

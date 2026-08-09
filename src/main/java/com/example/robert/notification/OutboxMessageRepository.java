@@ -16,7 +16,7 @@ import org.springframework.data.jpa.repository.QueryHints;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 
@@ -54,7 +54,7 @@ public interface OutboxMessageRepository extends JpaRepository<OutboxMessage, Lo
               and m.nextRetryAt <= :now
             order by m.id
             """)
-    List<OutboxMessage> findReadyToSend(@Param("now") LocalDateTime now, Limit limit);
+    List<OutboxMessage> findReadyToSend(@Param("now") Instant now, Limit limit);
 
     /**
      * Rezerwuje odczytane wiersze, odsuwając nextRetryAt w przyszłość i podbijając licznik
@@ -82,8 +82,8 @@ public interface OutboxMessageRepository extends JpaRepository<OutboxMessage, Lo
               and m.nextRetryAt <= :now
             """)
     int claim(@Param("ids") Collection<Long> ids,
-              @Param("now") LocalDateTime now,
-              @Param("reservedUntil") LocalDateTime reservedUntil);
+              @Param("now") Instant now,
+              @Param("reservedUntil") Instant reservedUntil);
 
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""
@@ -92,7 +92,7 @@ public interface OutboxMessageRepository extends JpaRepository<OutboxMessage, Lo
                 m.sentAt = :now, m.lastError = null
             where m.id = :id
             """)
-    int markSent(@Param("id") Long id, @Param("now") LocalDateTime now);
+    int markSent(@Param("id") Long id, @Param("now") Instant now);
 
     /** Porażka, ale próbujemy dalej - wiersz zostaje NEW z odsuniętym nextRetryAt. */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
@@ -102,7 +102,7 @@ public interface OutboxMessageRepository extends JpaRepository<OutboxMessage, Lo
             where m.id = :id
             """)
     int markRetry(@Param("id") Long id,
-                  @Param("nextRetryAt") LocalDateTime nextRetryAt,
+                  @Param("nextRetryAt") Instant nextRetryAt,
                   @Param("error") String error);
 
     @Modifying(clearAutomatically = true, flushAutomatically = true)
@@ -139,5 +139,5 @@ public interface OutboxMessageRepository extends JpaRepository<OutboxMessage, Lo
             where m.status = com.example.robert.notification.model.OutboxMessage$Status.SENT
               and m.sentAt < :cutoff
             """)
-    int deleteSentBefore(@Param("cutoff") LocalDateTime cutoff);
+    int deleteSentBefore(@Param("cutoff") Instant cutoff);
 }

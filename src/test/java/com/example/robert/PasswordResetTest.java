@@ -19,7 +19,8 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
-import java.time.LocalDateTime;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Arrays;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -197,7 +198,7 @@ class PasswordResetTest {
         User user = userRepository.findByEmail(EMAIL).orElseThrow();
         passwordResetTokenRepository.save(new PasswordResetToken(
                 TokenHasher.sha256Hex("wygasly-token"), user,
-                LocalDateTime.now().minusHours(2), LocalDateTime.now().minusHours(1)));
+                Instant.now().minus(Duration.ofHours(2)), Instant.now().minus(Duration.ofHours(1))));
 
         mockMvc.perform(post("/auth/reset-password")
                         .with(csrf())

@@ -15,7 +15,8 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 
-import java.time.LocalDateTime;
+import java.time.Duration;
+import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
@@ -120,7 +121,7 @@ class AccountLockoutTest {
         // Cofamy blokadę w czasie, jakby minęło jej 15 minut. Licznik ZOSTAJE na 3 -
         // i to jest stan, w którym poprzednia wersja natychmiast blokowała konto ponownie.
         jdbcTemplate.update("update users set locked_until = ? where email = ?",
-                LocalDateTime.now().minusMinutes(1), EMAIL);
+                Instant.now().minus(Duration.ofMinutes(1)), EMAIL);
 
         // Jedna pomyłka po wygaśnięciu blokady: 401, ale konto MUSI zostać otwarte
         assertThat(attemptLogin("ZleHaslo1")).isEqualTo(401);

@@ -10,7 +10,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 /**
  * Zgłoszenie rejestracji czekające na potwierdzenie adresu email.
@@ -51,13 +51,13 @@ public class PendingRegistration {
     private String tokenHash;
 
     @Column(name = "created_at", nullable = false)
-    private LocalDateTime createdAt;
+    private Instant createdAt;
 
     @Column(name = "expires_at", nullable = false)
-    private LocalDateTime expiresAt;
+    private Instant expiresAt;
 
     public PendingRegistration(String email, String name, String passwordHash,
-                               String tokenHash, LocalDateTime createdAt, LocalDateTime expiresAt) {
+                               String tokenHash, Instant createdAt, Instant expiresAt) {
         this.email = email;
         this.name = name;
         this.passwordHash = passwordHash;
@@ -67,6 +67,6 @@ public class PendingRegistration {
     }
 
     public boolean isExpired() {
-        return expiresAt.isBefore(LocalDateTime.now());
+        return expiresAt.isBefore(Instant.now());
     }
 }

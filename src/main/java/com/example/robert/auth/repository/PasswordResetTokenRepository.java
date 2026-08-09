@@ -11,7 +11,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.Optional;
 
 @Repository
@@ -28,9 +28,9 @@ public interface PasswordResetTokenRepository extends JpaRepository<PasswordRese
      */
     @Modifying
     @Query("update PasswordResetToken t set t.usedAt = :now where t.user.id = :userId and t.usedAt is null")
-    int invalidateAllForUser(@Param("userId") Long userId, @Param("now") LocalDateTime now);
+    int invalidateAllForUser(@Param("userId") Long userId, @Param("now") Instant now);
 
     @Modifying
     @Query("delete from PasswordResetToken t where t.expiresAt < :now")
-    int deleteAllExpired(@Param("now") LocalDateTime now);
+    int deleteAllExpired(@Param("now") Instant now);
 }

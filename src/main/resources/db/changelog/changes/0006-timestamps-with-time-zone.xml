@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <!--
+        Wszystkie kolumny czasowe przechodzą z "timestamp WITHOUT time zone" na "WITH time zone",
+        a encje z LocalDateTime na Instant.
+
+        DLACZEGO - kolumna bez strefy przechowuje gołą ścianę zegara i nie mówi, czyj to zegar.
+        Kod zapisywał do niej LocalDateTime.now(), czyli czas w strefie domyślnej JVM-a, więc
+        instancja na hoście (Europe/Warsaw) i instancja w kontenerze (UTC) wpisywały do jednej
+        tabeli dwa różne zegary i nic tego nie sygnalizowało. Zaobserwowane 2026-08-08
+        w outbox_messages: wiersz o id 4 z created_at 11:28 obok zapisanego PRZED nim wiersza
+        o id 3 z godziną 13:14.
+
+        Doraźnie załatwiono to wymuszeniem UTC w main(). To działa, ale ma dwie wady, których
+        nie da się usunąć bez zmiany typu kolumny: baza pokazuje godzinę przesuniętą względem
+        zegara oglądającego, a każda strefa ze zmianą czasu (a taka jest potrzebna, żeby pokazywać
+        czas lokalny) raz w roku powtarza godzinę 02:00-02:59 - znaczniki przestają wtedy rosnąć
+        i warunki typu "next_retry_at &lt;= now" tracą sens na całą tę godzinę.
+
+        timestamptz usuwa źródło problemu zamiast go obchodzić: kolumna trzyma punkt na osi czasu,
+        PostgreSQL sam przelicza go na strefę sesji przy odczycie (SET TIME ZONE 'Europe/Warsaw'
+        i widać polską godzinę), a Instant po stronie Javy nie ma "godziny", którą dałoby się
+        powtórzyć albo pominąć. Strefa domyślna JVM-a przestaje mieć wpływ na zapisywane dane.
+
+        UWAGA co do danych istniejących: wartości sprzed wymuszenia UTC pochodzą z dwóch zegarów
+        i nie da się ich rozróżnić po fakcie - kolumna nie zapisała, która jest która. Migracja
+        interpretuje WSZYSTKIE jako UTC, bo to jedyna spójna reguła; wiersze zapisane wcześniej
+        z hosta będą więc przesunięte o dwie godziny. Dotyczy to wyłącznie bazy deweloperskiej
+        (produkcji jeszcze nie ma), a rekordy, których to dotyczy, to wygasłe tokeny i wysłane
+        maile - nic, co miałoby dalej znaczenie.
+    -->
+
+    <changeSet id="0006-01-timestamps-to-timestamptz-postgresql" author="robert" dbms="postgresql">
+        <!--
+            Jawne "USING ... AT TIME ZONE 'UTC'" jest tu obowiązkowe. Bez tej klauzuli PostgreSQL
+            też wykona konwersję, ale zinterpretuje istniejące wartości w strefie SESJI, która
+            zmienia migracji sens w zależności od tego, kto i skąd ją uruchomił.
+        -->
+        <sql>
+            ALTER TABLE users
+                ALTER COLUMN created_at   TYPE TIMESTAMP(6) WITH TIME ZONE USING created_at   AT TIME ZONE 'UTC',
+                ALTER COLUMN locked_until TYPE TIMESTAMP(6) WITH TIME ZONE USING locked_until AT TIME ZONE 'UTC';
+
+            ALTER TABLE refresh_tokens
+                ALTER COLUMN issued_at  TYPE TIMESTAMP(6) WITH TIME ZONE USING issued_at  AT TIME ZONE 'UTC',
+                ALTER COLUMN expires_at TYPE TIMESTAMP(6) WITH TIME ZONE USING expires_at AT TIME ZONE 'UTC',
+                ALTER COLUMN revoked_at TYPE TIMESTAMP(6) WITH TIME ZONE USING revoked_at AT TIME ZONE 'UTC';
+
+            ALTER TABLE pending_registrations
+                ALTER COLUMN created_at TYPE TIMESTAMP(6) WITH TIME ZONE USING created_at AT TIME ZONE 'UTC',
+                ALTER COLUMN expires_at TYPE TIMESTAMP(6) WITH TIME ZONE USING expires_at AT TIME ZONE 'UTC';
+
+            ALTER TABLE password_reset_tokens
+                ALTER COLUMN created_at TYPE TIMESTAMP(6) WITH TIME ZONE USING created_at AT TIME ZONE 'UTC',
+                ALTER COLUMN expires_at TYPE TIMESTAMP(6) WITH TIME ZONE USING expires_at AT TIME ZONE 'UTC',
+                ALTER COLUMN used_at    TYPE TIMESTAMP(6) WITH TIME ZONE USING used_at    AT TIME ZONE 'UTC';
+
+            ALTER TABLE outbox_messages
+                ALTER COLUMN next_retry_at TYPE TIMESTAMP(6) WITH TIME ZONE USING next_retry_at AT TIME ZONE 'UTC',
+                ALTER COLUMN created_at    TYPE TIMESTAMP(6) WITH TIME ZONE USING created_at    AT TIME ZONE 'UTC',
+                ALTER COLUMN sent_at       TYPE TIMESTAMP(6) WITH TIME ZONE USING sent_at       AT TIME ZONE 'UTC';
+        </sql>
+
+        <!-- Powrót symetryczny: wartość zapisana jako punkt na osi wraca do ściany zegara UTC. -->
+        <rollback>
+            ALTER TABLE users
+                ALTER COLUMN created_at   TYPE TIMESTAMP(6) USING created_at   AT TIME ZONE 'UTC',
+                ALTER COLUMN locked_until TYPE TIMESTAMP(6) USING locked_until AT TIME ZONE 'UTC';
+
+            ALTER TABLE refresh_tokens
+                ALTER COLUMN issued_at  TYPE TIMESTAMP(6) USING issued_at  AT TIME ZONE 'UTC',
+                ALTER COLUMN expires_at TYPE TIMESTAMP(6) USING expires_at AT TIME ZONE 'UTC',
+                ALTER COLUMN revoked_at TYPE TIMESTAMP(6) USING revoked_at AT TIME ZONE 'UTC';
+
+            ALTER TABLE pending_registrations
+                ALTER COLUMN created_at TYPE TIMESTAMP(6) USING created_at AT TIME ZONE 'UTC',
+                ALTER COLUMN expires_at TYPE TIMESTAMP(6) USING expires_at AT TIME ZONE 'UTC';
+
+            ALTER TABLE password_reset_tokens
+                ALTER COLUMN created_at TYPE TIMESTAMP(6) USING created_at AT TIME ZONE 'UTC',
+                ALTER COLUMN expires_at TYPE TIMESTAMP(6) USING expires_at AT TIME ZONE 'UTC',
+                ALTER COLUMN used_at    TYPE TIMESTAMP(6) USING used_at    AT TIME ZONE 'UTC';
+
+            ALTER TABLE outbox_messages
+                ALTER COLUMN next_retry_at TYPE TIMESTAMP(6) USING next_retry_at AT TIME ZONE 'UTC',
+                ALTER COLUMN created_at    TYPE TIMESTAMP(6) USING created_at    AT TIME ZONE 'UTC',
+                ALTER COLUMN sent_at       TYPE TIMESTAMP(6) USING sent_at       AT TIME ZONE 'UTC';
+        </rollback>
+    </changeSet>
+
+    <changeSet id="0006-02-timestamps-to-timestamptz-h2" author="robert" dbms="h2">
+        <!--
+            H2 (testy) wykonuje to zawsze na PUSTYCH tabelach - baza powstaje od zera przy każdym
+            uruchomieniu suite'u - więc pytanie "jak zinterpretować istniejące wartości" tu nie
+            występuje i nie ma potrzeby odpowiednika klauzuli USING. Osobny changeset zamiast
+            jednego z <sql dbms="..."> dlatego, że składnia różni się na tyle, że wspólny plik
+            i tak zawierałby dwa rozłączne bloki - a rozdzielone widać w DATABASECHANGELOG, który
+            z nich faktycznie się wykonał.
+        -->
+        <sql>
+            ALTER TABLE users ALTER COLUMN created_at   SET DATA TYPE TIMESTAMP(6) WITH TIME ZONE;
+            ALTER TABLE users ALTER COLUMN locked_until SET DATA TYPE TIMESTAMP(6) WITH TIME ZONE;
+
+            ALTER TABLE refresh_tokens ALTER COLUMN issued_at  SET DATA TYPE TIMESTAMP(6) WITH TIME ZONE;
+            ALTER TABLE refresh_tokens ALTER COLUMN expires_at SET DATA TYPE TIMESTAMP(6) WITH TIME ZONE;
+            ALTER TABLE refresh_tokens ALTER COLUMN revoked_at SET DATA TYPE TIMESTAMP(6) WITH TIME ZONE;
+
+            ALTER TABLE pending_registrations ALTER COLUMN created_at SET DATA TYPE TIMESTAMP(6) WITH TIME ZONE;
+            ALTER TABLE pending_registrations ALTER COLUMN expires_at SET DATA TYPE TIMESTAMP(6) WITH TIME ZONE;
+
+            ALTER TABLE password_reset_tokens ALTER COLUMN created_at SET DATA TYPE TIMESTAMP(6) WITH TIME ZONE;
+            ALTER TABLE password_reset_tokens ALTER COLUMN expires_at SET DATA TYPE TIMESTAMP(6) WITH TIME ZONE;
+            ALTER TABLE password_reset_tokens ALTER COLUMN used_at    SET DATA TYPE TIMESTAMP(6) WITH TIME ZONE;
+
+            ALTER TABLE outbox_messages ALTER COLUMN next_retry_at SET DATA TYPE TIMESTAMP(6) WITH TIME ZONE;
+            ALTER TABLE outbox_messages ALTER COLUMN created_at    SET DATA TYPE TIMESTAMP(6) WITH TIME ZONE;
+            ALTER TABLE outbox_messages ALTER COLUMN sent_at       SET DATA TYPE TIMESTAMP(6) WITH TIME ZONE;
+        </sql>
+
+        <rollback>
+            ALTER TABLE users ALTER COLUMN created_at   SET DATA TYPE TIMESTAMP(6);
+            ALTER TABLE users ALTER COLUMN locked_until SET DATA TYPE TIMESTAMP(6);
+
+            ALTER TABLE refresh_tokens ALTER COLUMN issued_at  SET DATA TYPE TIMESTAMP(6);
+            ALTER TABLE refresh_tokens ALTER COLUMN expires_at SET DATA TYPE TIMESTAMP(6);
+            ALTER TABLE refresh_tokens ALTER COLUMN revoked_at SET DATA TYPE TIMESTAMP(6);
+
+            ALTER TABLE pending_registrations ALTER COLUMN created_at SET DATA TYPE TIMESTAMP(6);
+            ALTER TABLE pending_registrations ALTER COLUMN expires_at SET DATA TYPE TIMESTAMP(6);
+
+            ALTER TABLE password_reset_tokens ALTER COLUMN created_at SET DATA TYPE TIMESTAMP(6);
+            ALTER TABLE password_reset_tokens ALTER COLUMN expires_at SET DATA TYPE TIMESTAMP(6);
+            ALTER TABLE password_reset_tokens ALTER COLUMN used_at    SET DATA TYPE TIMESTAMP(6);
+
+            ALTER TABLE outbox_messages ALTER COLUMN next_retry_at SET DATA TYPE TIMESTAMP(6);
+            ALTER TABLE outbox_messages ALTER COLUMN created_at    SET DATA TYPE TIMESTAMP(6);
+            ALTER TABLE outbox_messages ALTER COLUMN sent_at       SET DATA TYPE TIMESTAMP(6);
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

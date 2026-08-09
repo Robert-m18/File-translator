@@ -10,7 +10,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 
-import java.time.LocalDateTime;
+import java.time.Duration;
+import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -56,7 +57,7 @@ class OutboxRetentionTest {
                 "retencja@example.com",
                 MailTemplate.VERIFICATION,
                 "{\"token\":\"5bd8d4cc-bce5-4d8f-bc9c-d6a65e6fb5d0\"}",
-                LocalDateTime.now()));
+                Instant.now()));
         repository.flush();
         return saved.getId();
     }
@@ -64,7 +65,7 @@ class OutboxRetentionTest {
     private Long sentHoursAgo(int hours) {
         Long id = enqueued();
         jdbcTemplate.update("update outbox_messages set status = 'SENT', sent_at = ? where id = ?",
-                LocalDateTime.now().minusHours(hours), id);
+                Instant.now().minus(Duration.ofHours(hours)), id);
         return id;
     }
 
@@ -92,7 +93,7 @@ class OutboxRetentionTest {
         Long id = enqueued();
         jdbcTemplate.update(
                 "update outbox_messages set status = 'FAILED', created_at = ? where id = ?",
-                LocalDateTime.now().minusDays(30), id);
+                Instant.now().minus(Duration.ofDays(30)), id);
 
         assertThat(cleanupJob.removeSentOlderThanRetention()).isZero();
         assertThat(repository.count()).isEqualTo(1);
@@ -107,7 +108,7 @@ class OutboxRetentionTest {
         Long id = enqueued();
         jdbcTemplate.update(
                 "update outbox_messages set created_at = ?, next_retry_at = ? where id = ?",
-                LocalDateTime.now().minusDays(30), LocalDateTime.now().minusDays(30), id);
+                Instant.now().minus(Duration.ofDays(30)), Instant.now().minus(Duration.ofDays(30)), id);
 
         assertThat(cleanupJob.removeSentOlderThanRetention()).isZero();
         assertThat(repository.count()).isEqualTo(1);

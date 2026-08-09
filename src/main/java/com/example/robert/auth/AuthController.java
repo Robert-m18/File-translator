@@ -27,7 +27,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.web.csrf.CsrfToken;
 import org.springframework.web.bind.annotation.*;
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 @RestController
 @RequestMapping("/auth")
@@ -52,7 +52,7 @@ public class AuthController {
 
 
         return ResponseEntity.status(HttpStatus.OK)
-                .body(new SuccessMessage("Zalogowano pomyślnie", LocalDateTime.now()));
+                .body(new SuccessMessage("Zalogowano pomyślnie", Instant.now()));
     }
 
     /**
@@ -70,14 +70,14 @@ public class AuthController {
         authService.register(request);
 
         return ResponseEntity.status(HttpStatus.ACCEPTED)
-                .body(new SuccessMessage("Sprawdź swoją skrzynkę email, aby dokończyć rejestrację", LocalDateTime.now()));
+                .body(new SuccessMessage("Sprawdź swoją skrzynkę email, aby dokończyć rejestrację", Instant.now()));
     }
 
     @PostMapping("/confirm")
     public ResponseEntity<SuccessMessage> confirmEmail(@Valid @RequestBody ConfirmEmailRequest request) {
         authService.confirmEmail(request.token());
 
-        return ResponseEntity.ok(new SuccessMessage("Email potwierdzony, możesz się zalogować", LocalDateTime.now()));
+        return ResponseEntity.ok(new SuccessMessage("Email potwierdzony, możesz się zalogować", Instant.now()));
     }
 
     /**
@@ -92,7 +92,7 @@ public class AuthController {
 
         return ResponseEntity.ok(new SuccessMessage(
                 "Jeśli konto istnieje, link do ustawienia nowego hasła został wysłany",
-                LocalDateTime.now()));
+                Instant.now()));
     }
 
     @PostMapping("/reset-password")
@@ -110,7 +110,7 @@ public class AuthController {
 
         return ResponseEntity.ok(new SuccessMessage(
                 "Hasło zmienione. Zaloguj się ponownie na wszystkich urządzeniach.",
-                LocalDateTime.now()));
+                Instant.now()));
     }
 
     /**
@@ -168,7 +168,7 @@ public class AuthController {
         response.addHeader(HttpHeaders.SET_COOKIE,
                 cookieService.createRefreshTokenCookie(newTokens.refreshToken()).toString());
 
-        return ResponseEntity.ok(new SuccessMessage("Token odświeżony", LocalDateTime.now()));
+        return ResponseEntity.ok(new SuccessMessage("Token odświeżony", Instant.now()));
     }
 
     @PostMapping("/logout")
@@ -185,7 +185,7 @@ public class AuthController {
         response.addHeader(HttpHeaders.SET_COOKIE,
                 cookieService.clearRefreshTokenCookie().toString());
 
-        return ResponseEntity.ok(new SuccessMessage("Wylogowano pomyślnie", LocalDateTime.now()));
+        return ResponseEntity.ok(new SuccessMessage("Wylogowano pomyślnie", Instant.now()));
     }
 
 }

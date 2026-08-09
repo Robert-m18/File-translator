@@ -21,7 +21,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -87,7 +87,7 @@ class OutboxTest {
      */
     private void makeReady() {
         jdbcTemplate.update("update outbox_messages set next_retry_at = ? where status = 'NEW'",
-                LocalDateTime.now().minusSeconds(1));
+                Instant.now().minusSeconds(1));
     }
 
     private OutboxMessage only() {
@@ -194,7 +194,7 @@ class OutboxTest {
         assertThat(message.getAttempts()).isEqualTo(1);
         assertThat(message.getLastError()).contains("SMTP nieosiągalny");
         // Backoff: kolejna próba dopiero po odstępie, nie natychmiast
-        assertThat(message.getNextRetryAt()).isAfter(LocalDateTime.now());
+        assertThat(message.getNextRetryAt()).isAfter(Instant.now());
     }
 
     @Test

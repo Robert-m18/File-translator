@@ -18,7 +18,8 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 
-import java.time.LocalDateTime;
+import java.time.Duration;
+import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
@@ -207,7 +208,7 @@ class PendingRegistrationTest {
         pendingRegistrationRepository.save(new PendingRegistration(
                 "spozniony@example.com", "Spozniony", passwordEncoder.encode("Haslo12345"),
                 TokenHasher.sha256Hex("stary-token"),
-                LocalDateTime.now().minusHours(48), LocalDateTime.now().minusHours(24)));
+                Instant.now().minus(Duration.ofHours(48)), Instant.now().minus(Duration.ofHours(24))));
 
         confirm("stary-token", 410); // 410 Gone - TokenExpiredException
 
@@ -219,10 +220,10 @@ class PendingRegistrationTest {
     void cleanup_shouldRemoveOnlyExpiredPendingRegistrations() {
         pendingRegistrationRepository.save(new PendingRegistration(
                 "porzucony@example.com", "Porzucony", "hash", TokenHasher.sha256Hex("t1"),
-                LocalDateTime.now().minusHours(48), LocalDateTime.now().minusHours(24)));
+                Instant.now().minus(Duration.ofHours(48)), Instant.now().minus(Duration.ofHours(24))));
         pendingRegistrationRepository.save(new PendingRegistration(
                 "swiezy@example.com", "Swiezy", "hash", TokenHasher.sha256Hex("t2"),
-                LocalDateTime.now(), LocalDateTime.now().plusHours(24)));
+                Instant.now(), Instant.now().plus(Duration.ofHours(24))));
 
         cleanupJob.cleanupExpiredTokens();
 

@@ -13,7 +13,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 /**
  * Nocne sprzątanie wygasłych tokenów i porzuconych zgłoszeń rejestracji.
@@ -42,7 +42,7 @@ public class ExpiredTokenCleanupJob {
     @Scheduled(cron = "0 0 3 * * *")
     @Transactional
     public void cleanupExpiredTokens() {
-        LocalDateTime now = LocalDateTime.now();
+        Instant now = Instant.now();
 
         // Porzucone zgłoszenia rejestracji: nikt nie kliknął linku w ciągu doby.
         // Adresu nie blokowały (unikalność obowiązuje dopiero w users), ale tabela

@@ -10,7 +10,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 /**
  * Jeden mail czekający na wysłanie.
@@ -64,18 +64,18 @@ public class OutboxMessage {
      * instancję, która właśnie zabiera się do wysyłki (patrz OutboxPublisher).
      */
     @Column(name = "next_retry_at", nullable = false)
-    private LocalDateTime nextRetryAt;
+    private Instant nextRetryAt;
 
     @Column(name = "last_error", length = 500)
     private String lastError;
 
     @Column(name = "created_at", nullable = false)
-    private LocalDateTime createdAt;
+    private Instant createdAt;
 
     @Column(name = "sent_at")
-    private LocalDateTime sentAt;
+    private Instant sentAt;
 
-    public OutboxMessage(String recipient, MailTemplate template, String payload, LocalDateTime now) {
+    public OutboxMessage(String recipient, MailTemplate template, String payload, Instant now) {
         this.recipient = recipient;
         this.template = template;
         this.payload = payload;

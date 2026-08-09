@@ -9,7 +9,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -21,7 +21,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * między testami".
  *
  * Mechanizm: kolumny czasowe mają precyzję MIKROSEKUNDOWĄ (TIMESTAMP(6) / DATETIME(6)),
- * a LocalDateTime.now() na tej maszynie daje setki nanosekund. Baza zaokrągla nadmiarowe
+ * a Instant.now() na tej maszynie daje setki nanosekund. Baza zaokrągla nadmiarowe
  * cyfry W GÓRĘ, więc wiersz zapisany "na teraz" lądował w niej ze znacznikiem do pół
  * mikrosekundy w PRZYSZŁOŚCI. Publisher szuka wierszy warunkiem next_retry_at <= :now,
  * więc taki wiersz bywał niewidoczny dla własnego cyklu i ginął zawsze ten zapisany
@@ -46,7 +46,7 @@ class OutboxTimestampTest {
         repository.deleteAll();
     }
 
-    private OutboxMessage save(LocalDateTime timestamp) {
+    private OutboxMessage save(Instant timestamp) {
         OutboxMessage saved = repository.save(new OutboxMessage(
                 "znacznik@example.com", MailTemplate.VERIFICATION, "{}", timestamp));
         repository.flush();
@@ -65,7 +65,7 @@ class OutboxTimestampTest {
     @Test
     @DisplayName("Zapisany znacznik wraca z bazy bez zmiany")
     void savedTimestamp_shouldSurviveRoundTripUnchanged() {
-        LocalDateTime generated = OutboxClock.now();
+        Instant generated = OutboxClock.now();
 
         OutboxMessage read = save(generated);
 
@@ -85,7 +85,7 @@ class OutboxTimestampTest {
     @Test
     @DisplayName("Nieobcięty znacznik wraca z bazy przesunięty w przyszłość")
     void subMicrosecondPrecision_isRoundedUpByDatabase() {
-        LocalDateTime peryferyjny = LocalDateTime.now()
+        Instant peryferyjny = Instant.now()
                 .truncatedTo(OutboxClock.COLUMN_PRECISION)
                 .plusNanos(600);
 
@@ -100,7 +100,7 @@ class OutboxTimestampTest {
     @DisplayName("Źródło czasu skrzynki nie generuje cyfr poniżej mikrosekundy")
     void clock_shouldNotProduceSubMicrosecondDigits() {
         assertThat(OutboxClock.now().getNano() % 1_000).isZero();
-        assertThat(OutboxClock.truncate(LocalDateTime.now().plusNanos(999)).getNano() % 1_000)
+        assertThat(OutboxClock.truncate(Instant.now().plusNanos(999)).getNano() % 1_000)
                 .isZero();
     }
 }
