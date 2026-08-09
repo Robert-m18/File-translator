@@ -134,7 +134,13 @@ jobs:
   docker:
     name: Docker image builds
     runs-on: ubuntu-latest
-    needs: build
+    # OBA joby testowe, nie sam "build". Wcześniej stało tu "needs: build", więc obraz
+    # powstawał także wtedy, gdy "integration" był czerwony - a to jedyny job sprawdzający
+    # migracje i zapytania na silniku, którego używa produkcja. Trafione 2026-08-09:
+    # 7 błędów na PostgreSQL-u przy zielonym H2 i mimo to zbudowany obraz.
+    # needs wymaga POWODZENIA wszystkich wymienionych jobów - porażka albo anulowanie
+    # któregokolwiek pomija ten job.
+    needs: [ build, integration ]
     steps:
       - uses: actions/checkout@v4
 
