@@ -13,6 +13,7 @@ import org.springframework.test.context.ActiveProfiles;
 import java.time.Duration;
 import java.time.Instant;
 
+import static com.example.robert.TestTime.sql;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -65,7 +66,7 @@ class OutboxRetentionTest {
     private Long sentHoursAgo(int hours) {
         Long id = enqueued();
         jdbcTemplate.update("update outbox_messages set status = 'SENT', sent_at = ? where id = ?",
-                Instant.now().minus(Duration.ofHours(hours)), id);
+                sql(Instant.now().minus(Duration.ofHours(hours))), id);
         return id;
     }
 
@@ -93,7 +94,7 @@ class OutboxRetentionTest {
         Long id = enqueued();
         jdbcTemplate.update(
                 "update outbox_messages set status = 'FAILED', created_at = ? where id = ?",
-                Instant.now().minus(Duration.ofDays(30)), id);
+                sql(Instant.now().minus(Duration.ofDays(30))), id);
 
         assertThat(cleanupJob.removeSentOlderThanRetention()).isZero();
         assertThat(repository.count()).isEqualTo(1);
@@ -108,7 +109,7 @@ class OutboxRetentionTest {
         Long id = enqueued();
         jdbcTemplate.update(
                 "update outbox_messages set created_at = ?, next_retry_at = ? where id = ?",
-                Instant.now().minus(Duration.ofDays(30)), Instant.now().minus(Duration.ofDays(30)), id);
+                sql(Instant.now().minus(Duration.ofDays(30))), sql(Instant.now().minus(Duration.ofDays(30))), id);
 
         assertThat(cleanupJob.removeSentOlderThanRetention()).isZero();
         assertThat(repository.count()).isEqualTo(1);

@@ -25,6 +25,7 @@ import java.time.Instant;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
+import static com.example.robert.TestTime.sql;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
@@ -87,7 +88,7 @@ class OutboxTest {
      */
     private void makeReady() {
         jdbcTemplate.update("update outbox_messages set next_retry_at = ? where status = 'NEW'",
-                Instant.now().minusSeconds(1));
+                sql(Instant.now().minusSeconds(1)));
     }
 
     private OutboxMessage only() {
