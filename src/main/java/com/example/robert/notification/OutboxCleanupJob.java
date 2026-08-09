@@ -10,7 +10,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 /**
  * Nocne usuwanie wysłanych wiadomości ze skrzynki nadawczej.
@@ -77,7 +77,7 @@ public class OutboxCleanupJob {
         // Obcięcie do precyzji kolumny tą samą drogą co reszta skrzynki nadawczej (OutboxClock).
         // Przy granicy odliczanej o dobę wstecz zaokrąglenie o pół mikrosekundy nie ma
         // znaczenia, ale jedno źródło czasu dla całej funkcji jest warte więcej niż wyjątek.
-        LocalDateTime cutoff = OutboxClock.now().minus(properties.retention());
+        Instant cutoff = OutboxClock.now().minus(properties.retention());
         return repository.deleteSentBefore(cutoff);
     }
 }

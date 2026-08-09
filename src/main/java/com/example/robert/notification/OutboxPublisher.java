@@ -17,7 +17,7 @@ import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 
 import java.time.Duration;
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -160,7 +160,7 @@ public class OutboxPublisher {
      * @return wiadomości zarezerwowane dla tej instancji, w stanie sprzed rezerwacji
      */
     private List<OutboxMessage> claimBatch() {
-        LocalDateTime now = OutboxClock.now();
+        Instant now = OutboxClock.now();
 
         List<OutboxMessage> claimed = shortTransaction.execute(status -> {
             List<OutboxMessage> candidates =
@@ -235,7 +235,7 @@ public class OutboxPublisher {
             // Obcięcie jak wszędzie w tej ścieżce: ten znacznik też jest potem porównywany
             // warunkiem "<= now", więc zaokrąglenie w górę odsuwałoby ponowienie o mikrosekundę
             // i - przy dostatecznie krótkim backoffie - powtarzało ten sam wyścig.
-            LocalDateTime nextRetry = OutboxClock.truncate(LocalDateTime.now().plus(delay));
+            Instant nextRetry = OutboxClock.truncate(Instant.now().plus(delay));
 
             shortTransaction.execute(status -> repository.markRetry(message.getId(), nextRetry, error));
             log.warn("Nie udało się wysłać maila (id={}, podejście={}/{}), ponowienie za {}: {}",

@@ -11,7 +11,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 /**
  * Zapis wydanego tokenu odświeżającego.
@@ -48,16 +48,16 @@ public class RefreshToken {
     private String familyId;
 
     @Column(name = "issued_at", nullable = false)
-    private LocalDateTime issuedAt;
+    private Instant issuedAt;
 
     @Column(name = "expires_at", nullable = false)
-    private LocalDateTime expiresAt;
+    private Instant expiresAt;
 
     /** NULL = token aktywny. Ustawiane przy rotacji, wylogowaniu i unieważnieniu rodziny. */
     @Column(name = "revoked_at")
-    private LocalDateTime revokedAt;
+    private Instant revokedAt;
 
-    public RefreshToken(String tokenHash, User user, String familyId, LocalDateTime issuedAt, LocalDateTime expiresAt) {
+    public RefreshToken(String tokenHash, User user, String familyId, Instant issuedAt, Instant expiresAt) {
         this.tokenHash = tokenHash;
         this.user = user;
         this.familyId = familyId;
@@ -70,6 +70,6 @@ public class RefreshToken {
     }
 
     public boolean isExpired() {
-        return expiresAt.isBefore(LocalDateTime.now());
+        return expiresAt.isBefore(Instant.now());
     }
 }

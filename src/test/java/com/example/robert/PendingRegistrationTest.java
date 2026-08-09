@@ -18,11 +18,14 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 
-import java.time.LocalDateTime;
+import java.time.Duration;
+import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.containsString;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
@@ -169,12 +172,43 @@ class PendingRegistrationTest {
     }
 
     @Test
+    @DisplayName("Ponowne kliknięcie zużytego linku mówi, że mógł już zostać wykorzystany")
+    void confirm_replayedToken_shouldNotReadAsForgedLink() throws Exception {
+        register("Adrian", "adrian@example.com", "Haslo12345");
+        String token = pinToken("adrian@example.com", "token-adriana");
+        confirm(token, 200);
+
+        /*
+         * To samo żądanie drugi raz - tak wygląda odświeżenie strony potwierdzenia, więc
+         * jest to najczęstsza droga do tej odpowiedzi, a nie przypadek brzegowy. Kod zostaje
+         * INVALID_TOKEN, bo serwer naprawdę nie umie odróżnić zużytego linku od zmyślonego;
+         * zmienia się to, co czyta użytkownik.
+         *
+         * Wyjątkowo asercja na TREŚĆ komunikatu, choć konwencja każe frontom rozgałwiać się
+         * po "code": naprawą jest właśnie treść, więc test sprawdzający sam kod przechodziłby
+         * identycznie przed i po zmianie, czyli nie pilnowałby niczego.
+         */
+        mockMvc.perform(post("/auth/confirm")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"token":"%s"}
+                                """.formatted(token)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_TOKEN"))
+                .andExpect(jsonPath("$.detail").value(containsString("wykorzystany")));
+
+        // Konto z pierwszego potwierdzenia jest nietknięte - powtórka niczego nie psuje
+        assertThat(userRepository.findByEmail("adrian@example.com")).isPresent();
+    }
+
+    @Test
     @DisplayName("Wygasłe zgłoszenie nie aktywuje konta")
     void confirm_shouldRejectExpiredPendingRegistration() throws Exception {
         pendingRegistrationRepository.save(new PendingRegistration(
                 "spozniony@example.com", "Spozniony", passwordEncoder.encode("Haslo12345"),
                 TokenHasher.sha256Hex("stary-token"),
-                LocalDateTime.now().minusHours(48), LocalDateTime.now().minusHours(24)));
+                Instant.now().minus(Duration.ofHours(48)), Instant.now().minus(Duration.ofHours(24))));
 
         confirm("stary-token", 410); // 410 Gone - TokenExpiredException
 
@@ -186,10 +220,10 @@ class PendingRegistrationTest {
     void cleanup_shouldRemoveOnlyExpiredPendingRegistrations() {
         pendingRegistrationRepository.save(new PendingRegistration(
                 "porzucony@example.com", "Porzucony", "hash", TokenHasher.sha256Hex("t1"),
-                LocalDateTime.now().minusHours(48), LocalDateTime.now().minusHours(24)));
+                Instant.now().minus(Duration.ofHours(48)), Instant.now().minus(Duration.ofHours(24))));
         pendingRegistrationRepository.save(new PendingRegistration(
                 "swiezy@example.com", "Swiezy", "hash", TokenHasher.sha256Hex("t2"),
-                LocalDateTime.now(), LocalDateTime.now().plusHours(24)));
+                Instant.now(), Instant.now().plus(Duration.ofHours(24))));
 
         cleanupJob.cleanupExpiredTokens();
 

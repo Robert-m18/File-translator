@@ -9,7 +9,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
-import java.time.ZoneOffset;
+import java.time.ZoneId;
 import java.util.TimeZone;
 
 /**
@@ -21,49 +21,59 @@ import java.util.TimeZone;
 @ConfigurationPropertiesScan
 public class FileTranslatorApplication {
 
+	/**
+	 * Strefa prezentacji: logi i wyrażenia cron. NIE ma wpływu na dane w bazie - patrz niżej.
+	 *
+	 * Nazwana strefa, nie stały offset (nie ZoneOffset.ofHours(2)): sama pilnuje przejścia
+	 * na czas letni, więc "3:00" w cronie zostaje trzecią w nocy przez cały rok.
+	 */
+	static final ZoneId DISPLAY_ZONE = ZoneId.of("Europe/Warsaw");
+
 	public static void main(String[] args) {
-		enforceUtcTimeZone();
+		enforceDisplayTimeZone();
 		SpringApplication.run(FileTranslatorApplication.class, args);
 	}
 
 	/**
-	 * Wymusza UTC jako strefę domyślną JVM-a, ZANIM cokolwiek odczyta zegar.
+	 * Ustawia strefę domyślną JVM-a, ZANIM cokolwiek odczyta zegar.
 	 *
-	 * DLACZEGO TO ISTNIEJE - kolumny czasowe są typu "timestamp WITHOUT time zone", a kod
-	 * zapisuje do nich LocalDateTime.now(), czyli czas w strefie domyślnej JVM-a. Strefa
-	 * nie jest nigdzie zapisana razem z wartością, więc dwie instancje o różnych strefach
-	 * wpisują do jednej tabeli czasy z DWÓCH ZEGARÓW i nic tego nie sygnalizuje.
+	 * HISTORIA, bo bez niej to ustawienie wygląda na kosmetykę. Kolumny czasowe były typu
+	 * "timestamp WITHOUT time zone", a kod zapisywał do nich LocalDateTime.now(), czyli gołą
+	 * ścianę zegara w strefie domyślnej JVM-a. Strefa nie szła razem z wartością, więc
+	 * instancja na hoście (Europe/Warsaw) i instancja w kontenerze (UTC) wpisywały do jednej
+	 * tabeli dwa różne zegary i nic tego nie sygnalizowało: 2026-08-08 w outbox_messages
+	 * wiersz o id 4 miał created_at 11:28, a zapisany PRZED nim wiersz o id 3 - godzinę 13:14.
+	 * Doraźnie wymuszano tu wtedy UTC, żeby wszystkie instancje pisały jednym zegarem.
 	 *
-	 * Nie jest to hipoteza - tak wyglądała ta baza 2026-08-08. Wiersz outboxu o id 4 miał
-	 * created_at 11:28, a zapisany przed nim wiersz o id 3 - godzinę 13:14. Wiersz 3 zapisała
-	 * aplikacja z hosta (Europe/Warsaw, UTC+2), wiersz 4 aplikacja z kontenera (UTC).
+	 * DLACZEGO TERAZ MOŻE TO BYĆ STREFA LOKALNA - changeset 0006 przestawił kolumny na
+	 * "WITH time zone", a encje na Instant. Zapisywany jest punkt na osi czasu razem ze strefą,
+	 * więc strefa domyślna JVM-a nie ma już wpływu na to, CO trafia do bazy - dwie instancje
+	 * o różnych strefach zapiszą tę samą wartość. Zniknął przy okazji drugi powód, dla którego
+	 * strefa lokalna była tu wcześniej nie do przyjęcia: zmiana czasu. Przy kolumnie bez strefy
+	 * powtórzona godzina 02:00-02:59 w ostatnią niedzielę października cofa zapisywane znaczniki
+	 * i psuje warunki typu "next_retry_at &lt;= now"; Instant nie ma godziny, którą dałoby się
+	 * powtórzyć albo pominąć, więc problem nie występuje.
 	 *
-	 * Skutek jest cichy i dotyczy każdego miejsca, w którym zapisany znacznik porównujemy
-	 * potem z now():
-	 *   - publisher szuka wierszy warunkiem next_retry_at <= now, więc mail zamówiony przez
-	 *     instancję "przesuniętą w przód" jest dla instancji o zegarze UTC niewidoczny przez
-	 *     całą różnicę stref - dwie godziny leżenia w kolejce, bez żadnego błędu w logach,
-	 *   - okno rezerwacji (claim-timeout 2 min) traci sens między takimi instancjami, więc
-	 *     ten sam mail może polecieć dwa razy,
-	 *   - expires_at tokenów wygasa o różnicę stref za wcześnie albo za późno.
+	 * ZOSTAJE, mimo że nie chroni już danych, i to z dwóch powodów:
+	 *  - logi wszystkich instancji mają jedną strefę, więc znaczniki z hosta i z kontenera
+	 *    da się porównywać wprost, bez pytania "czyj to zegar",
+	 *  - @Scheduled(cron) interpretuje godzinę w strefie domyślnej JVM-a, więc bez tego nocne
+	 *    sprzątanie chodziłoby o dwie godziny inaczej na hoście niż w kontenerze.
+	 * Crony 3:00 i 3:10 są bezpieczne wobec zmiany czasu w Polsce: na wiosnę przeskok idzie
+	 * z 02:00 na 03:00 (trzecia istnieje), jesienią z 03:00 na 02:00 (trzecia wypada raz).
 	 *
 	 * Dlaczego w kodzie, a nie przez TZ w docker-compose czy w konfiguracji IDE: ustawienie
 	 * poza aplikacją trzeba pamiętać w KAŻDYM środowisku, a pominięcie go w jednym nie daje
-	 * żadnego objawu przy starcie. Tutaj obowiązuje wszędzie i nie da się go zapomnieć.
+	 * żadnego objawu przy starcie.
 	 *
-	 * Dlaczego przed SpringApplication.run: strefa domyślna musi być ustawiona, zanim
-	 * powstanie pierwszy bean czytający zegar (np. AdminBootstrap zapisujący created_at).
+	 * Dlaczego przed SpringApplication.run: strefa musi być ustawiona, zanim powstanie
+	 * pierwszy bean czytający zegar.
 	 *
-	 * Świadomy skutek uboczny: logi na hoście mają teraz czas UTC, czyli o różnicę stref
-	 * inny niż zegar systemowy. To jest cena tego, że czas w logach, w bazie i w kontenerze
-	 * jest wreszcie jedną i tą samą wartością. Cron nocnego sprzątania (3:00) to również UTC.
-	 *
-	 * Właściwym rozwiązaniem docelowym jest timestamptz + Instant, wtedy strefa jedzie razem
-	 * z wartością i to ustawienie przestaje być potrzebne. To migracja wszystkich kolumn
-	 * czasowych i zmiana encji, więc osobne zadanie - a do tego czasu jedna strefa wszędzie.
+	 * UWAGA przy oglądaniu bazy: klient SQL pokazuje timestamptz w SWOJEJ strefie, nie w tej.
+	 * Domyślnie jest to strefa systemowa maszyny, czyli zwykle ta sama godzina co tutaj.
 	 */
-	static void enforceUtcTimeZone() {
-		TimeZone.setDefault(TimeZone.getTimeZone(ZoneOffset.UTC));
+	static void enforceDisplayTimeZone() {
+		TimeZone.setDefault(TimeZone.getTimeZone(DISPLAY_ZONE));
 	}
 
 }

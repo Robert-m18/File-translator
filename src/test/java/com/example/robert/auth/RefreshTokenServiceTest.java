@@ -18,7 +18,8 @@ import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.AbstractPlatformTransactionManager;
 import org.springframework.transaction.support.DefaultTransactionStatus;
 
-import java.time.LocalDateTime;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -67,9 +68,9 @@ class RefreshTokenServiceTest {
     }
 
     private RefreshToken activeToken(String rawToken, String familyId) {
-        LocalDateTime now = LocalDateTime.now();
+        Instant now = Instant.now();
         return new RefreshToken(TokenHasher.sha256Hex(rawToken), user, familyId,
-                now.minusMinutes(5), now.plusDays(7));
+                now.minus(Duration.ofMinutes(5)), now.plus(Duration.ofDays(7)));
     }
 
     @Test
@@ -113,7 +114,7 @@ class RefreshTokenServiceTest {
     @DisplayName("Ponowne użycie zużytego tokenu unieważnia całą rodzinę")
     void rotate_shouldRevokeWholeFamily_whenTokenAlreadyUsed() {
         RefreshToken alreadyUsed = activeToken("skradziony-token", "rodzina-1");
-        alreadyUsed.setRevokedAt(LocalDateTime.now().minusMinutes(1));
+        alreadyUsed.setRevokedAt(Instant.now().minus(Duration.ofMinutes(1)));
 
         when(refreshTokenRepository.findByTokenHash(TokenHasher.sha256Hex("skradziony-token")))
                 .thenReturn(Optional.of(alreadyUsed));
@@ -124,7 +125,7 @@ class RefreshTokenServiceTest {
         assertThat(ex.getTokenError()).isEqualTo("REFRESH_TOKEN_REUSED");
         // Cała sesja pada - napastnik i prawowity użytkownik tracą dostęp,
         // bo nie da się rozstrzygnąć, który z nich jest który
-        verify(refreshTokenRepository).revokeFamily(eq("rodzina-1"), any(LocalDateTime.class));
+        verify(refreshTokenRepository).revokeFamily(eq("rodzina-1"), any(Instant.class));
         // Żaden nowy token nie może zostać wydany
         verify(refreshTokenRepository, never()).save(any());
     }
@@ -144,9 +145,9 @@ class RefreshTokenServiceTest {
     @Test
     @DisplayName("Wygasły token odświeżający jest odrzucany")
     void rotate_shouldRejectExpiredToken() {
-        LocalDateTime now = LocalDateTime.now();
+        Instant now = Instant.now();
         RefreshToken expired = new RefreshToken(TokenHasher.sha256Hex("wygasly-token"), user, "rodzina-1",
-                now.minusDays(8), now.minusDays(1));
+                now.minus(Duration.ofDays(8)), now.minus(Duration.ofDays(1)));
         when(refreshTokenRepository.findByTokenHash(TokenHasher.sha256Hex("wygasly-token")))
                 .thenReturn(Optional.of(expired));
 
@@ -165,7 +166,7 @@ class RefreshTokenServiceTest {
 
         refreshTokenService.revokeSession("token-sesji");
 
-        verify(refreshTokenRepository).revokeFamily(eq("rodzina-7"), any(LocalDateTime.class));
+        verify(refreshTokenRepository).revokeFamily(eq("rodzina-7"), any(Instant.class));
     }
 
     @Test

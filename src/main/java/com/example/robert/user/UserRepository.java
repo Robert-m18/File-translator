@@ -11,7 +11,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.Optional;
 
 @Repository
@@ -39,7 +39,7 @@ public interface UserRepository extends JpaRepository<User, Long> {
 
     @Modifying(clearAutomatically = true)
     @Query("update User u set u.lockedUntil = :until where u.email = :email")
-    int lockAccountUntil(@Param("email") String email, @Param("until") LocalDateTime until);
+    int lockAccountUntil(@Param("email") String email, @Param("until") Instant until);
 
     @Query("select u.failedLoginAttempts from User u where u.email = :email")
     Optional<Integer> findFailedLoginAttempts(@Param("email") String email);
@@ -60,5 +60,5 @@ public interface UserRepository extends JpaRepository<User, Long> {
             update User u set u.failedLoginAttempts = 0, u.lockedUntil = null
             where u.email = :email and u.lockedUntil is not null and u.lockedUntil < :now
             """)
-    int clearExpiredLock(@Param("email") String email, @Param("now") LocalDateTime now);
+    int clearExpiredLock(@Param("email") String email, @Param("now") Instant now);
 }

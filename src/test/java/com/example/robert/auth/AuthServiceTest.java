@@ -23,7 +23,8 @@ import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
-import java.time.LocalDateTime;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -133,7 +134,7 @@ class AuthServiceTest {
     void confirmEmail_shouldCreateUserFromPendingRegistration() {
         PendingRegistration pending = new PendingRegistration(
                 "adrian@test.pl", "Adrian", "hash-z-poczekalni", "token-hash",
-                LocalDateTime.now(), LocalDateTime.now().plusHours(24));
+                Instant.now(), Instant.now().plus(Duration.ofHours(24)));
 
         when(pendingRegistrationRepository.findByTokenHash(any())).thenReturn(Optional.of(pending));
         when(userService.existsByEmail("adrian@test.pl")).thenReturn(false);
@@ -154,7 +155,7 @@ class AuthServiceTest {
         // konta danymi ze starszego zgłoszenia byłoby cichą zmianą hasła.
         PendingRegistration pending = new PendingRegistration(
                 "adrian@test.pl", "Adrian", "stary-hash", "token-hash",
-                LocalDateTime.now(), LocalDateTime.now().plusHours(24));
+                Instant.now(), Instant.now().plus(Duration.ofHours(24)));
 
         when(pendingRegistrationRepository.findByTokenHash(any())).thenReturn(Optional.of(pending));
         when(userService.existsByEmail("adrian@test.pl")).thenReturn(true);
@@ -178,7 +179,7 @@ class AuthServiceTest {
     void confirmEmail_shouldRejectExpiredToken() {
         PendingRegistration expired = new PendingRegistration(
                 "adrian@test.pl", "Adrian", "hash", "token-hash",
-                LocalDateTime.now().minusHours(48), LocalDateTime.now().minusHours(24));
+                Instant.now().minus(Duration.ofHours(48)), Instant.now().minus(Duration.ofHours(24)));
 
         when(pendingRegistrationRepository.findByTokenHash(any())).thenReturn(Optional.of(expired));
 
@@ -216,7 +217,7 @@ class AuthServiceTest {
     void resetPassword_shouldSetNewPassword_revokeSessions_andClearLock() {
         User target = user(7L, "adrian@test.pl");
         PasswordResetToken token = new PasswordResetToken(
-                "token-hash", target, LocalDateTime.now(), LocalDateTime.now().plusHours(1));
+                "token-hash", target, Instant.now(), Instant.now().plus(Duration.ofHours(1)));
 
         when(passwordResetTokenRepository.findByTokenHash(any())).thenReturn(Optional.of(token));
         when(passwordEncoder.encode("NoweHaslo9")).thenReturn("nowy-hash");
@@ -235,8 +236,8 @@ class AuthServiceTest {
     void resetPassword_shouldRejectAlreadyUsedToken() {
         User target = user(7L, "adrian@test.pl");
         PasswordResetToken used = new PasswordResetToken(
-                "token-hash", target, LocalDateTime.now(), LocalDateTime.now().plusHours(1));
-        used.setUsedAt(LocalDateTime.now());
+                "token-hash", target, Instant.now(), Instant.now().plus(Duration.ofHours(1)));
+        used.setUsedAt(Instant.now());
 
         when(passwordResetTokenRepository.findByTokenHash(any())).thenReturn(Optional.of(used));
 
@@ -250,7 +251,7 @@ class AuthServiceTest {
     void resetPassword_shouldRejectExpiredToken() {
         User target = user(7L, "adrian@test.pl");
         PasswordResetToken expired = new PasswordResetToken(
-                "token-hash", target, LocalDateTime.now().minusHours(2), LocalDateTime.now().minusHours(1));
+                "token-hash", target, Instant.now().minus(Duration.ofHours(2)), Instant.now().minus(Duration.ofHours(1)));
 
         when(passwordResetTokenRepository.findByTokenHash(any())).thenReturn(Optional.of(expired));
 

@@ -18,7 +18,7 @@ import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.UUID;
 
 /**
@@ -94,7 +94,7 @@ public class RefreshTokenService {
     public void rotate(String presentedRawToken, String newRawToken) {
         RefreshToken current = loadAndValidate(presentedRawToken);
 
-        LocalDateTime now = LocalDateTime.now();
+        Instant now = Instant.now();
         current.setRevokedAt(now); // encja jest zarządzana - dirty checking zapisze zmianę
 
         persist(newRawToken, current.getUser(), current.getFamilyId());
@@ -108,7 +108,7 @@ public class RefreshTokenService {
     public void revokeSession(String rawRefreshToken) {
         refreshTokenRepository.findByTokenHash(TokenHasher.sha256Hex(rawRefreshToken))
                 .ifPresent(token -> {
-                    int revoked = refreshTokenRepository.revokeFamily(token.getFamilyId(), LocalDateTime.now());
+                    int revoked = refreshTokenRepository.revokeFamily(token.getFamilyId(), Instant.now());
                     log.info("Wylogowanie - unieważniono {} token(ów) odświeżających", revoked);
                 });
         // Brak tokenu w bazie nie jest błędem: wylogowanie ma być idempotentne,
@@ -123,7 +123,7 @@ public class RefreshTokenService {
      */
     @Transactional
     public int revokeAllSessions(Long userId) {
-        return refreshTokenRepository.revokeAllForUser(userId, LocalDateTime.now());
+        return refreshTokenRepository.revokeAllForUser(userId, Instant.now());
     }
 
     private RefreshToken loadAndValidate(String rawToken) {
@@ -139,7 +139,7 @@ public class RefreshTokenService {
         if (token.isRevoked()) {
             String familyId = token.getFamilyId();
             Integer revoked = independentTransaction.execute(status ->
-                    refreshTokenRepository.revokeFamily(familyId, LocalDateTime.now()));
+                    refreshTokenRepository.revokeFamily(familyId, Instant.now()));
 
             log.warn("Wykryto ponowne użycie zużytego tokenu odświeżającego (familyId={}). "
                     + "Unieważniono całą rodzinę: {} token(ów)", familyId, revoked);
@@ -155,7 +155,7 @@ public class RefreshTokenService {
     }
 
     private void persist(String rawToken, User user, String familyId) {
-        LocalDateTime now = LocalDateTime.now();
+        Instant now = Instant.now();
         refreshTokenRepository.save(new RefreshToken(
                 TokenHasher.sha256Hex(rawToken),
                 user,

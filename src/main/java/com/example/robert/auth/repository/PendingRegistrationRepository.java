@@ -11,7 +11,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.Optional;
 
 @Repository
@@ -30,5 +30,5 @@ public interface PendingRegistrationRepository extends JpaRepository<PendingRegi
 
     @Modifying
     @Query("delete from PendingRegistration p where p.expiresAt < :now")
-    int deleteAllExpired(@Param("now") LocalDateTime now);
+    int deleteAllExpired(@Param("now") Instant now);
 }
