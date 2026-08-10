@@ -20,6 +20,7 @@ import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.DefaultAuthenticationEventPublisher;
@@ -285,8 +286,24 @@ public class SecurityConfig {
         configuration.setAllowedHeaders(List.of("*"));
         // Wymagane, żeby przeglądarka w ogóle wysyłała i przyjmowała nasze ciasteczka
         configuration.setAllowCredentials(true);
-        // Bez tego JavaScript nie odczyta nagłówka korelacji z odpowiedzi
-        configuration.setExposedHeaders(List.of(TraceIdFilter.TRACE_ID_HEADER));
+        /*
+         * Przeglądarka udostępnia JavaScriptowi TYLKO nagłówki wymienione tutaj - reszta
+         * jest dla niego niewidoczna, mimo że przyszła w odpowiedzi. Domyślnie widać
+         * garstkę nagłówków prostych, a Content-Disposition do niej NIE należy.
+         *
+         * Skutek pominięcia jest cichy i mylący, bo żądanie kończy się sukcesem: pobranie
+         * przetłumaczonego pliku działa, tylko frontend nie ma jak odczytać zaproponowanej
+         * nazwy i zapisuje plik pod nazwą awaryjną. Wykryte 2026-08-10 przy przechodzeniu
+         * przepływu w przeglądarce - "lista-FR.txt" zapisało się jako "tlumaczenie.txt".
+         * Testy MockMvc tego nie złapią, bo nie ma tam ani przeglądarki, ani polityki CORS;
+         * regresję pilnuje CorsExposedHeadersTest.
+         *
+         * TRACE_ID_HEADER z tego samego powodu: bez niego użytkownik zgłaszający błąd nie
+         * ma czego podać, żeby dało się odnaleźć jego żądanie w logach.
+         */
+        configuration.setExposedHeaders(List.of(
+                TraceIdFilter.TRACE_ID_HEADER,
+                HttpHeaders.CONTENT_DISPOSITION));
         // Cache preflightu - mniej zapytań OPTIONS
         configuration.setMaxAge(3600L);
 
