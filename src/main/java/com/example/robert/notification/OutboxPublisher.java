@@ -4,6 +4,7 @@
  */
 package com.example.robert.notification;
 
+import com.example.robert.common.time.DbClock;
 import com.example.robert.notification.model.OutboxMessage;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
@@ -160,7 +161,7 @@ public class OutboxPublisher {
      * @return wiadomości zarezerwowane dla tej instancji, w stanie sprzed rezerwacji
      */
     private List<OutboxMessage> claimBatch() {
-        Instant now = OutboxClock.now();
+        Instant now = DbClock.now();
 
         List<OutboxMessage> claimed = shortTransaction.execute(status -> {
             List<OutboxMessage> candidates =
@@ -191,7 +192,7 @@ public class OutboxPublisher {
 
         try {
             deliver(message);
-            shortTransaction.execute(status -> repository.markSent(message.getId(), OutboxClock.now()));
+            shortTransaction.execute(status -> repository.markSent(message.getId(), DbClock.now()));
             log.info("Mail wysłany ze skrzynki nadawczej (id={}, szablon={}, podejście={})",
                     message.getId(), message.getTemplate(), attempt);
             return true;
@@ -235,7 +236,7 @@ public class OutboxPublisher {
             // Obcięcie jak wszędzie w tej ścieżce: ten znacznik też jest potem porównywany
             // warunkiem "<= now", więc zaokrąglenie w górę odsuwałoby ponowienie o mikrosekundę
             // i - przy dostatecznie krótkim backoffie - powtarzało ten sam wyścig.
-            Instant nextRetry = OutboxClock.truncate(Instant.now().plus(delay));
+            Instant nextRetry = DbClock.truncate(Instant.now().plus(delay));
 
             shortTransaction.execute(status -> repository.markRetry(message.getId(), nextRetry, error));
             log.warn("Nie udało się wysłać maila (id={}, podejście={}/{}), ponowienie za {}: {}",

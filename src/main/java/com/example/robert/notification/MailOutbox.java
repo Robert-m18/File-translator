@@ -4,6 +4,7 @@
  */
 package com.example.robert.notification;
 
+import com.example.robert.common.time.DbClock;
 import com.example.robert.notification.model.MailTemplate;
 import com.example.robert.notification.model.OutboxMessage;
 import lombok.RequiredArgsConstructor;
@@ -57,8 +58,8 @@ public class MailOutbox {
                 objectMapper.writeValueAsString(variables),
                 // Obcięty do precyzji kolumny - inaczej baza zaokrągli go W GÓRĘ i wiersz
                 // zapisany "na teraz" będzie miał czas w przyszłości, niewidoczny dla
-                // najbliższego cyklu publishera. Uzasadnienie: OutboxClock.
-                OutboxClock.now()
+                // najbliższego cyklu publishera. Uzasadnienie: DbClock.
+                DbClock.now()
         ));
 
         // Bez adresu w logu - to dane osobowe. Do powiązania z konkretnym żądaniem

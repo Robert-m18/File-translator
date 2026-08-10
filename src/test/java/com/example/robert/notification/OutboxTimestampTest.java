@@ -1,5 +1,6 @@
 package com.example.robert.notification;
 
+import com.example.robert.common.time.DbClock;
 import com.example.robert.notification.model.MailTemplate;
 import com.example.robert.notification.model.OutboxMessage;
 import org.junit.jupiter.api.BeforeEach;
@@ -27,8 +28,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * więc taki wiersz bywał niewidoczny dla własnego cyklu i ginął zawsze ten zapisany
  * jako ostatni - stąd "wysłano 0 z 1" i zablokowana bariera w teście równoległości.
  *
- * Test jest w pakiecie notification, bo OutboxClock jest pakietowo-prywatny; nie ma powodu
- * wystawiać go szerzej tylko po to, żeby dało się go sprawdzić.
+ * Test został przy skrzynce nadawczej, choć źródło czasu (DbClock) mieszka od tej pory
+ * w common/time i służy także kolejce zadań tłumaczenia: to właśnie tutaj wyścig się
+ * objawiał i tutaj jest zapisana cała jego historia.
  *
  * Klasa siedzi OSOBNO od OutboxTest świadomie: tamta klasa jest wciąż niestabilna z innego,
  * nieustalonego powodu (patrz CLAUDE.md), a regresja na już zrozumianą przyczynę nie może
@@ -65,7 +67,7 @@ class OutboxTimestampTest {
     @Test
     @DisplayName("Zapisany znacznik wraca z bazy bez zmiany")
     void savedTimestamp_shouldSurviveRoundTripUnchanged() {
-        Instant generated = OutboxClock.now();
+        Instant generated = DbClock.now();
 
         OutboxMessage read = save(generated);
 
@@ -74,11 +76,11 @@ class OutboxTimestampTest {
     }
 
     /**
-     * Dowód, że zagrożenie jest realne, a obcinanie w OutboxClock nie jest przesadną
+     * Dowód, że zagrożenie jest realne, a obcinanie w DbClock nie jest przesadną
      * ostrożnością: wartość z cyframi poniżej mikrosekundy WRACA Z BAZY PRZESUNIĘTA W PRZÓD.
      *
      * Gdyby ten test kiedyś zaczął padać, znaczyłoby to, że baza (albo sterownik, albo
-     * precyzja kolumny) zmieniła zachowanie na obcinanie - wtedy OutboxClock przestaje być
+     * precyzja kolumny) zmieniła zachowanie na obcinanie - wtedy DbClock przestaje być
      * potrzebny. To jedyny sposób, żeby dowiedzieć się tego inaczej niż przez powrót
      * niestabilnych testów.
      */
@@ -86,7 +88,7 @@ class OutboxTimestampTest {
     @DisplayName("Nieobcięty znacznik wraca z bazy przesunięty w przyszłość")
     void subMicrosecondPrecision_isRoundedUpByDatabase() {
         Instant peryferyjny = Instant.now()
-                .truncatedTo(OutboxClock.COLUMN_PRECISION)
+                .truncatedTo(DbClock.COLUMN_PRECISION)
                 .plusNanos(600);
 
         OutboxMessage read = save(peryferyjny);
@@ -99,8 +101,8 @@ class OutboxTimestampTest {
     @Test
     @DisplayName("Źródło czasu skrzynki nie generuje cyfr poniżej mikrosekundy")
     void clock_shouldNotProduceSubMicrosecondDigits() {
-        assertThat(OutboxClock.now().getNano() % 1_000).isZero();
-        assertThat(OutboxClock.truncate(Instant.now().plusNanos(999)).getNano() % 1_000)
+        assertThat(DbClock.now().getNano() % 1_000).isZero();
+        assertThat(DbClock.truncate(Instant.now().plusNanos(999)).getNano() % 1_000)
                 .isZero();
     }
 }
