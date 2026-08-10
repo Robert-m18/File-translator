@@ -214,6 +214,8 @@ public class OutboxPublisher {
             case PASSWORD_RESET -> emailService.sendPasswordResetEmail(
                     message.getRecipient(), vars.get("name"), vars.get("token"));
             case ACCOUNT_EXISTS -> emailService.sendAccountExistsEmail(message.getRecipient());
+            case TRANSLATION_DONE -> emailService.sendTranslationDoneEmail(
+                    message.getRecipient(), vars.get("name"), vars.get("filename"));
         }
     }
 

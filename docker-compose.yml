@@ -98,6 +98,12 @@ services:
       # ten plik jest lokalnym środowiskiem deweloperskim i niesie już postgres/postgres do bazy.
       # Do application-dev.yml to NIE trafia, bo "dev" jest profilem domyślnym - znane hasło
       # do konta z dostępem do aktuatora dostawałby wtedy każdy ./mvnw spring-boot:run.
+      # echo = atrapa oznaczająca tekst; nic nie wychodzi na zewnątrz i nie trzeba konta
+      # u dostawcy. Żeby tłumaczyć naprawdę: TRANSLATION_PROVIDER=deepl i DEEPL_API_KEY
+      # z konta DeepL API Free (uwaga: konta darmowe używają hosta api-free.deepl.com,
+      # płatne api.deepl.com - pomyłka daje 403 wyglądające jak zły klucz).
+      TRANSLATION_PROVIDER: "${TRANSLATION_PROVIDER:-echo}"
+      DEEPL_API_KEY: "${DEEPL_API_KEY:-}"
       ADMIN_ENABLED: "true"
       ADMIN_EMAIL: admin@file-translator.local
       ADMIN_PASSWORD: LokalnyAdmin1

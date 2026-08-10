@@ -1,0 +1,153 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="0007-01-create-translation-jobs" author="robert">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <tableExists tableName="translation_jobs"/>
+            </not>
+        </preConditions>
+
+        <!--
+            Kolejka zleceń tłumaczenia plików.
+
+            DLACZEGO TABELA, A NIE WYWOŁANIE SYNCHRONICZNE: tłumaczenie to rozmowa
+            z zewnętrznym API, trwająca od setek milisekund do kilkunastu sekund. Trzymanie
+            przez ten czas wątku HTTP wiąże przepustowość API z przepustowością obcego
+            serwisu, a każda jego czkawka zamienia się w timeout u użytkownika. Zlecenie
+            zapisane w bazie przeżywa restart aplikacji, da się je ponowić i da się o jego
+            stan zapytać po identyfikatorze - czego log zdarzeń (Kafka) sam z siebie nie daje.
+
+            MECHANIKA REZERWACJI jest ta sama co w outbox_messages (changeset 0005): wiersz
+            bierze do obróbki instancja, która przesunie next_attempt_at w przyszłość
+            w tej samej transakcji co odczyt blokujący (FOR UPDATE SKIP LOCKED). Dzięki temu
+            dwie instancje czytają ROZŁĄCZNE paczki, a proces, który padł w trakcie, nie
+            zostawia zlecenia zablokowanego na zawsze - wraca ono samo po upływie okna.
+
+            RÓŻNICA WOBEC SKRZYNKI NADAWCZEJ: tutaj JEST status PROCESSING. W outboxie
+            świadomie go nie ma, bo osierocony status "w trakcie" strandowałby wiersz na
+            wieki. Tutaj status jest częścią kontraktu API (użytkownik widzi różnicę między
+            "w kolejce" a "tłumaczę"), a przed strandowaniem chroni to samo co tam: okno
+            rezerwacji na next_attempt_at. Zapytanie rezerwujące bierze wiersze o statusie
+            PENDING LUB PROCESSING z next_attempt_at <= teraz, więc jedno pole niesie
+            rezerwację, a drugie - prezentację.
+        -->
+        <createTable tableName="translation_jobs">
+            <column name="id" type="BIGINT" autoIncrement="true">
+                <constraints primaryKey="true" primaryKeyName="pk_translation_jobs" nullable="false"/>
+            </column>
+
+            <!-- Właściciel zlecenia. Każde zapytanie odczytujące bierze tę kolumnę do WHERE,
+                 zamiast pobierać wiersz po id i porównywać właściciela w kodzie: dzięki temu
+                 "nie ma takiego zlecenia" i "to nie twoje zlecenie" są nierozróżnialne
+                 z zewnątrz i API nie daje się użyć do skanowania cudzych identyfikatorów. -->
+            <column name="user_id" type="BIGINT">
+                <constraints nullable="false"/>
+            </column>
+
+            <!-- Nazwa wgranego pliku, obcięta po stronie aplikacji do samego segmentu.
+                 Wraca w nagłówku Content-Disposition przy pobraniu wyniku. -->
+            <column name="original_filename" type="VARCHAR(255)">
+                <constraints nullable="false"/>
+            </column>
+
+            <!-- Wykrywa go dostawca, więc znany jest dopiero po udanym tłumaczeniu. -->
+            <column name="source_lang" type="VARCHAR(10)"/>
+            <column name="target_lang" type="VARCHAR(10)">
+                <constraints nullable="false"/>
+            </column>
+
+            <!-- PENDING | PROCESSING | DONE | FAILED - patrz TranslationStatus -->
+            <column name="status" type="VARCHAR(20)">
+                <constraints nullable="false"/>
+            </column>
+
+            <!--
+                Treść plików trzymamy w bazie, nie na dysku ani w magazynie obiektowym.
+                Zapis jest wtedy transakcyjny razem z wierszem zlecenia, więc wycofana
+                transakcja nie zostawia osieroconego pliku, kopia zapasowa obejmuje jedno
+                i drugie, a testy na H2 nie potrzebują żadnego wolumenu.
+
+                Długości są WYPROWADZONE, nie zgadnięte. Upload jest ograniczony do 256 KB
+                BAJTÓW (spring.servlet.multipart.max-file-size), więc tekst UTF-8 nie
+                przekroczy 262 144 ZNAKÓW - kolumna jest trzecim, bazodanowym piętrem tego
+                samego limitu. Wynik dostaje dwukrotność, bo tłumaczenie potrafi urosnąć
+                (PL->DE bywa dłuższe o 20-30%), a cicha utrata końcówki pliku przy zapisie
+                byłaby najgorszym możliwym trybem awarii.
+
+                DLACZEGO 256 KB, A NIE 1 MB: darmowy próg DeepL to 500 tys. znaków
+                MIESIĘCZNIE na całe konto, więc jeden plik po 1 mln znaków wyczerpywałby go
+                dwukrotnie. Limit rozmiaru musi być pochodną ekonomii dostawcy, inaczej jest
+                liczbą wziętą z powietrza. Realnym ogranicznikiem i tak jest dobowy limit
+                znaków użytkownika (app.translation.daily-char-limit) - rozmiar pliku odcina
+                tylko to, co nie ma prawa wjechać do pamięci procesu.
+
+                VARCHAR(n), a nie TEXT ani @Lob: @Lob na PostgreSQL mapuje się na duży
+                obiekt (OID) z własnym cyklem życia, a TEXT wymagałby @JdbcTypeCode, żeby
+                przeszła weryfikacja Hibernate'a (ddl-auto: validate). W PostgreSQL varchar
+                z limitem i text są przechowywane identycznie (TOAST), więc nic nie tracimy.
+                Jest przy tym GÓRNA GRANICA: powyżej maksymalnej długości varchara danego
+                dialektu (na H2 to 1 048 576) Hibernate oczekuje już CLOB-a i walidacja
+                schematu pada. Obie kolumny mieszczą się pod nią z zapasem - podnoszenie
+                limitu uploadu wymaga sprawdzenia, czy nadal się mieszczą.
+            -->
+            <column name="source_content" type="VARCHAR(262144)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="result_content" type="VARCHAR(524288)"/>
+
+            <!-- Liczba znaków źródła. Pod dobowy limit użytkownika i pod metryki - liczenie
+                 length(source_content) przy każdym sprawdzeniu limitu czytałoby całą treść. -->
+            <column name="char_count" type="INT">
+                <constraints nullable="false"/>
+            </column>
+
+            <!-- Liczy PODEJŚCIA (rezerwacje), nie potwierdzone porażki - tak samo jak
+                 w skrzynce nadawczej, i z tego samego powodu: brak statusu "w trakcie"
+                 kupujemy tym, że rezerwacja podbija licznik od razu. -->
+            <column name="attempts" type="INT" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+
+            <!-- Kiedy najwcześniej wolno wziąć to zlecenie. Dwie role naraz: opóźnienie
+                 przy ponowieniu (backoff) i rezerwacja wiersza przez instancję. -->
+            <column name="next_attempt_at" type="${type.timestamptz}">
+                <constraints nullable="false"/>
+            </column>
+
+            <!-- Bez tego status FAILED nie mówi nic poza tym, że się nie udało. -->
+            <column name="last_error" type="VARCHAR(500)"/>
+
+            <column name="created_at" type="${type.timestamptz}">
+                <constraints nullable="false"/>
+            </column>
+            <column name="completed_at" type="${type.timestamptz}"/>
+        </createTable>
+
+        <!-- Pod zapytanie rezerwujące: zlecenia gotowe do wzięcia. -->
+        <createIndex indexName="idx_translation_jobs_status_next_attempt" tableName="translation_jobs">
+            <column name="status"/>
+            <column name="next_attempt_at"/>
+        </createIndex>
+
+        <!-- Pod listę zleceń właściciela i pod sumowanie znaków z ostatniej doby. -->
+        <createIndex indexName="idx_translation_jobs_user_created" tableName="translation_jobs">
+            <column name="user_id"/>
+            <column name="created_at"/>
+        </createIndex>
+
+        <!-- CASCADE jak przy refresh_tokens: skasowane konto nie zostawia po sobie
+             treści plików, które nie mają już właściciela. -->
+        <addForeignKeyConstraint baseTableName="translation_jobs"
+                                 baseColumnNames="user_id"
+                                 constraintName="fk_translation_jobs_user"
+                                 referencedTableName="users"
+                                 referencedColumnNames="id"
+                                 onDelete="CASCADE"/>
+    </changeSet>
+
+</databaseChangeLog>

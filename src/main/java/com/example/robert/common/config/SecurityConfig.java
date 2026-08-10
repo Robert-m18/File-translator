@@ -187,6 +187,14 @@ public class SecurityConfig {
                         // wróci, jego endpointy będą chronione od pierwszego commitu,
                         // a nie dopiero po tym, jak ktoś zauważy, że są otwarte.
                         .requestMatchers("/users/**").hasRole("ADMIN")
+                        // Zlecenia tłumaczenia - wyłącznie dla zalogowanych. Reguła jest
+                        // jawna, choć anyRequest() poniżej i tak by ją pokryła: przynależność
+                        // zasobu do konkretnego użytkownika ma być widoczna w konfiguracji
+                        // bezpieczeństwa, a nie wynikać z domyślnego zachowania. Sam dostęp
+                        // do CUDZYCH zleceń odcina warunek na user_id w zapytaniach
+                        // (TranslationJobRepository) - autoryzacja per wiersz nie da się
+                        // wyrazić matcherem po ścieżce.
+                        .requestMatchers("/translations/**").authenticated()
                         .anyRequest().authenticated()
                 )
                 /*

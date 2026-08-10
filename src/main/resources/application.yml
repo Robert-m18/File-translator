@@ -9,12 +9,13 @@ spring:
     active: "${SPRING_PROFILES_ACTIVE:dev}"
   task:
     scheduling:
-      # Domyślnie harmonogram ma JEDEN wątek, a mamy trzy zadania: nocne sprzątanie
-      # tokenów, nocne sprzątanie skrzynki nadawczej i wysyłkę maili co 10 s. Przy jednym
-      # wątku długie sprzątanie wstrzymywałoby wysyłkę. Rośnie razem z liczbą zadań
-      # @Scheduled - dokładając czwarte, podnieś i to.
+      # Domyślnie harmonogram ma JEDEN wątek, a mamy pięć zadań: trzy nocne sprzątania
+      # (tokeny 3:00, skrzynka nadawcza 3:10, zlecenia tłumaczeń 3:20), wysyłkę maili
+      # co 10 s i workera tłumaczeń co 2 s. Przy jednym wątku długie sprzątanie
+      # wstrzymywałoby wysyłkę, a worker tłumaczeń blokuje swój wątek na czas rozmowy
+      # z dostawcą. Rośnie razem z liczbą zadań @Scheduled - dokładając szóste, podnieś i to.
       pool:
-        size: 3
+        size: 5
   datasource:
     # Domyślnie celuje w bazę z docker-compose (host 5433), a NIE w domyślny port
     # 5432. Na maszynach deweloperskich stoi tam zwykle inny, lokalnie zainstalowany
@@ -35,6 +36,19 @@ spring:
     # Bez tego Spring Boot szuka domyślnie db/changelog/db.changelog-master.yaml
     # i po cichu nie uruchamia żadnych migracji.
     change-log: classpath:db/changelog/db.changelog-master.xml
+  servlet:
+    multipart:
+      # Twardy limit wgrywanego pliku, egzekwowany ZANIM plik wjedzie w całości do pamięci.
+      # 256 KB nie jest liczbą z powietrza: darmowy próg DeepL to 500 tys. znaków
+      # miesięcznie na całe konto, więc plik o rozmiarze 1 MB (czyli do miliona znaków)
+      # wyczerpywałby go dwukrotnie jednym żądaniem. Realnym ogranicznikiem dla użytkownika
+      # jest i tak app.translation.daily-char-limit - to tutaj odcina tylko to, co nie ma
+      # prawa trafić do pamięci procesu. Podnoszenie wymaga sprawdzenia długości kolumn
+      # source_content/result_content (changeset 0007).
+      max-file-size: 256KB
+      # Nieco więcej niż plik: w żądaniu multipart jadą jeszcze nagłówki części i pole
+      # targetLang. Bez zapasu poprawny plik o maksymalnym rozmiarze byłby odrzucany.
+      max-request-size: 512KB
 
 server:
   port: "${SERVER_PORT:2009}"
@@ -91,6 +105,45 @@ app:
     # Kasowane są WYŁĄCZNIE wiersze SENT: FAILED zostaje, bo na nim stoi countFailed().
     retention: 1d
 
+  # Tłumaczenie plików. Uzasadnienie kolejki i modelu: changelog 0007-translation-jobs.xml.
+  translation:
+    enabled: true
+    # echo  - atrapa oznaczająca tekst; nic nie wychodzi na zewnątrz, żaden klucz niepotrzebny
+    # deepl - prawdziwe tłumaczenie; wymaga DEEPL_API_KEY
+    # Domyślnie echo, bo brak klucza ma dawać działającą aplikację, a nie taką, która
+    # przyjmuje zlecenia i po cichu je porzuca.
+    provider: "${TRANSLATION_PROVIDER:echo}"
+    # Krócej niż w skrzynce nadawczej (10 s): tu po drugiej stronie czeka człowiek
+    # patrzący na ekran, a nie skrzynka pocztowa.
+    poll-interval: 2s
+    # Ile znaków jeden użytkownik może zlecić w ciągu doby. Chroni konto u dostawcy,
+    # nie serwer - od serwera jest limiter żądań niżej.
+    daily-char-limit: 50000
+    batch-size: 5
+    # Dostawcy limitują liczbę równoczesnych żądań; nieograniczona pula zamienia szczyt
+    # ruchu w serię odpowiedzi 429 dla całej paczki.
+    concurrency: 2
+    max-attempts: 3
+    # Rośnie wykładniczo: 10s, 20s, 40s.
+    retry-backoff: 10s
+    # Musi być wyraźnie dłuższe niż realny czas odpowiedzi dostawcy, inaczej druga instancja
+    # zabierze zlecenie, gdy pierwsza jeszcze czeka.
+    claim-timeout: 2m
+    # W source_content i result_content leżą PLIKI UŻYTKOWNIKA - to jest powód retencji,
+    # nie rozmiar tabeli. Użytkownik może skasować zlecenie sam; to jest to, co dzieje się,
+    # gdy tego nie zrobi.
+    retention: 30d
+    deepl:
+      # Konta darmowe mają INNY host niż płatne - pomyłka kończy się odpowiedzią 403,
+      # która wygląda jak zły klucz.
+      api-url: "${DEEPL_API_URL:https://api-free.deepl.com/v2}"
+      api-key: "${DEEPL_API_KEY:}"
+      connect-timeout: 5s
+      # BEZ tego zawieszony dostawca trzyma wątek z puli tłumaczeń w nieskończoność -
+      # przy concurrency: 2 wystarczą dwa takie żądania, żeby kolejka stanęła i nie
+      # pojawił się przy tym ani jeden wpis w logu.
+      read-timeout: 30s
+
   # Konto administratora zakładane przy starcie. Bez niego rola ADMIN jest nieosiągalna,
   # a więc /actuator/metrics i /actuator/prometheus są martwe. Szczegóły: AdminBootstrap.
   admin:
@@ -146,6 +199,13 @@ app:
       - path: /auth/refresh
         capacity: 30
         period: 1m
+      # Wyłącznie POST: zlecenie tłumaczenia kosztuje znaki u zewnętrznego dostawcy,
+      # a odczyt listy i odpytywanie o status są darmowe. Bez rozróżnienia metody
+      # frontend odpytujący co 2 s o status wyczerpywałby próg przeznaczony na zlecenia.
+      - path: /translations
+        method: POST
+        capacity: 30
+        period: 1h
 
 management:
   endpoints:
