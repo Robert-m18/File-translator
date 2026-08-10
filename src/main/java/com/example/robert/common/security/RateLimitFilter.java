@@ -21,6 +21,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.time.Duration;
+import java.util.Locale;
 import java.util.Optional;
 
 /**
@@ -85,7 +86,13 @@ public class RateLimitFilter extends OncePerRequestFilter {
                                     FilterChain filterChain) throws ServletException, IOException {
 
         RateLimitProperties.Policy policy = findPolicy(request).orElseThrow();
-        String key = policy.path() + "|" + clientIp(request);
+
+        // Metoda jest częścią klucza, inaczej dwie reguły na tej samej ścieżce (np. osobny
+        // próg dla POST /translations i dla GET /translations) dzieliłyby JEDEN kubełek -
+        // i ta o mniejszej pojemności odcinałaby ruch objęty tą drugą.
+        String scope = policy.method() == null || policy.method().isBlank()
+                ? "*" : policy.method().toUpperCase(Locale.ROOT);
+        String key = policy.path() + "|" + scope + "|" + clientIp(request);
 
         Bucket bucket = bucketProvider.resolveBucket(key, policy);
         ConsumptionProbe probe = bucket.tryConsumeAndReturnRemaining(1);
@@ -128,6 +135,11 @@ public class RateLimitFilter extends OncePerRequestFilter {
         String path = request.getRequestURI();
         return properties.policies().stream()
                 .filter(policy -> pathMatcher.match(policy.path(), path))
+                // Metoda sprawdzana obok ścieżki, bo koszt żądania potrafi się między nimi
+                // różnić o rzędy wielkości: POST /translations woła płatne API dostawcy,
+                // GET tej samej ścieżki czyta wiersz z bazy. Reguła bez metody obejmuje
+                // wszystkie - tak działają wszystkie reguły dla /auth/**.
+                .filter(policy -> policy.matchesMethod(request.getMethod()))
                 .findFirst();
     }
 
