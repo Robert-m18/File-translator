@@ -4,6 +4,7 @@
  */
 package com.example.robert.notification;
 
+import com.example.robert.common.time.DbClock;
 import com.example.robert.notification.model.MailTemplate;
 import com.example.robert.notification.model.OutboxMessage;
 import lombok.RequiredArgsConstructor;
@@ -45,6 +46,17 @@ public class MailOutbox {
         enqueue(email, MailTemplate.PASSWORD_RESET, Map.of("name", name, "token", rawToken));
     }
 
+    /**
+     * Powiadomienie o gotowym tłumaczeniu.
+     *
+     * Payload niesie NAZWĘ pliku, nigdy jego treści ani treści tłumaczenia: kolumna payload
+     * leży w bazie plaintekstem, więc wszystko, co tu wpiszemy, przestaje być chronione
+     * retencją tabeli zleceń i staje się kopią danych użytkownika w drugim miejscu.
+     */
+    public void enqueueTranslationDone(String email, String name, String filename) {
+        enqueue(email, MailTemplate.TRANSLATION_DONE, Map.of("name", name, "filename", filename));
+    }
+
     public void enqueueAccountExists(String email) {
         // Bez zmiennych - ten mail nie niesie tokenu, bo nie ma czego aktywować
         enqueue(email, MailTemplate.ACCOUNT_EXISTS, Map.of());
@@ -57,8 +69,8 @@ public class MailOutbox {
                 objectMapper.writeValueAsString(variables),
                 // Obcięty do precyzji kolumny - inaczej baza zaokrągli go W GÓRĘ i wiersz
                 // zapisany "na teraz" będzie miał czas w przyszłości, niewidoczny dla
-                // najbliższego cyklu publishera. Uzasadnienie: OutboxClock.
-                OutboxClock.now()
+                // najbliższego cyklu publishera. Uzasadnienie: DbClock.
+                DbClock.now()
         ));
 
         // Bez adresu w logu - to dane osobowe. Do powiązania z konkretnym żądaniem

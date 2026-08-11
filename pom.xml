@@ -45,6 +45,17 @@
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-mail</artifactId>
 		</dependency>
+		<!-- Klient HTTP do API dostawcy tłumaczeń (DeepL).
+		     UWAGA, ta sama pułapka co przy liquibase: sama klasa RestClient siedzi
+		     w spring-web, które jest już na ścieżce klas, ale wstrzykiwalny
+		     RestClient.Builder oraz ClientHttpRequestFactoryBuilder (potrzebny do
+		     USTAWIENIA TIMEOUTÓW) przyszły w Spring Boocie 4 do osobnego modułu.
+		     Bez tej zależności kod się nie kompiluje, a bez timeoutów zawieszony
+		     dostawca zatrzymałby kolejkę tłumaczeń bez śladu w logach. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-restclient</artifactId>
+		</dependency>
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-thymeleaf</artifactId>

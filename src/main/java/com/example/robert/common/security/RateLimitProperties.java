@@ -45,13 +45,30 @@ public record RateLimitProperties(
 
     /**
      * @param path     wzorzec ścieżki w składni Ant (np. /auth/login, /auth/**)
+     * @param method   metoda HTTP, której reguła dotyczy; PUSTE = dowolna metoda
      * @param capacity ile żądań mieści się w oknie
      * @param period   długość okna, po którym pula odnawia się w całości
      */
     public record Policy(
             @NotBlank String path,
+            /*
+             * Dołożone dla /translations, gdzie POST kosztuje znaki u zewnętrznego dostawcy,
+             * a GET listy jest darmowy. Bez rozróżnienia metody jedna reguła musiałaby objąć
+             * oba przypadki: albo próg dla POST-a byłby tak wysoki, żeby odpytywanie listy
+             * się w nim mieściło (czyli nie chroniłby przed niczym), albo odpytywanie listy
+             * odbijałoby się od progu ustawionego dla zleceń.
+             *
+             * Domyślnie null, czyli "dowolna metoda" - żadna z istniejących reguł (/auth/**)
+             * nie zmienia przez to zachowania.
+             */
+            String method,
             @Positive int capacity,
             @NotNull Duration period
     ) {
+
+        /** Czy reguła obejmuje żądanie o podanej metodzie. */
+        public boolean matchesMethod(String requestMethod) {
+            return method == null || method.isBlank() || method.equalsIgnoreCase(requestMethod);
+        }
     }
 }

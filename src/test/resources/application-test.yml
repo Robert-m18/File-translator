@@ -78,6 +78,28 @@ app:
     max-attempts: 3
     retry-backoff: 1s
     claim-timeout: 2m
+  translation:
+    # Wyłączone z tego samego powodu co outbox: worker odpalający się w tle zabierałby
+    # zlecenia, które testy chcą sprawdzić. Testy wołają processBatch() wprost.
+    enabled: false
+    provider: echo
+    poll-interval: 1h
+    # Wysoko, żeby zwykłe testy nie odbijały się od limitu. Test limitu ustawia swój
+    # własny przez @TestPropertySource.
+    daily-char-limit: 1000000
+    batch-size: 5
+    # Powyżej 1, żeby testy przechodziły przez ścieżkę równoległą, a nie obok niej
+    concurrency: 2
+    # Niżej niż na produkcji, żeby test wyczerpania prób nie potrzebował trzech iteracji
+    max-attempts: 2
+    retry-backoff: 1s
+    claim-timeout: 2m
+    retention: 30d
+    deepl:
+      api-url: http://localhost/deepl-nieuzywany
+      api-key: ""
+      connect-timeout: 1s
+      read-timeout: 2s
   account-lock:
     enabled: true
     max-attempts: 3

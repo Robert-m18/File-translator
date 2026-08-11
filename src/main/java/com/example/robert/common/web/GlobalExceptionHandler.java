@@ -7,8 +7,14 @@ package com.example.robert.common.web;
 import com.example.robert.common.exception.InvalidTokenException;
 import com.example.robert.common.exception.JwtAuthenticationException;
 import com.example.robert.common.exception.TokenExpiredException;
+import com.example.robert.translation.exception.InvalidUploadException;
+import com.example.robert.translation.exception.TranslationJobNotFoundException;
+import com.example.robert.translation.exception.TranslationNotReadyException;
+import com.example.robert.translation.exception.TranslationQuotaExceededException;
+import com.example.robert.translation.model.TargetLanguage;
 import lombok.extern.slf4j.Slf4j;
 import org.hibernate.exception.ConstraintViolationException;
+import org.springframework.beans.TypeMismatchException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -23,6 +29,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.WebRequest;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
 
 import java.util.List;
@@ -124,6 +131,46 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     }
 
     /**
+     * Wgrany plik nie nadaje się do tłumaczenia (pusty, złe rozszerzenie, złe kodowanie).
+     * Kod maszynowy przychodzi z wyjątku, bo przyczyny są trzy, a odpowiedź jedna.
+     */
+    @ExceptionHandler(InvalidUploadException.class)
+    public ProblemDetail handleInvalidUpload(InvalidUploadException ex) {
+        log.warn("Odrzucono przesłany plik: {}", ex.getCode());
+        return ApiProblem.of(HttpStatus.BAD_REQUEST, "Nieprawidłowy plik",
+                ex.getMessage(), ex.getCode());
+    }
+
+    @ExceptionHandler(TranslationJobNotFoundException.class)
+    public ProblemDetail handleTranslationJobNotFound(TranslationJobNotFoundException ex) {
+        // Świadomie nie logujemy id: ta sama odpowiedź należy się zleceniu nieistniejącemu
+        // i cudzemu, a rozróżnienie ich w logu zachęca do rozróżnienia ich w odpowiedzi.
+        log.warn("Nie znaleziono zlecenia tłumaczenia dla bieżącego użytkownika");
+        return ApiProblem.of(HttpStatus.NOT_FOUND, "Nie znaleziono",
+                ex.getMessage(), "TRANSLATION_JOB_NOT_FOUND");
+    }
+
+    /**
+     * Zlecenie istnieje, ale nie ma jeszcze wyniku. Status wraca w ciele, bo tylko on
+     * mówi frontendowi, czy odpytywać dalej (PENDING/PROCESSING), czy przestać (FAILED).
+     */
+    @ExceptionHandler(TranslationNotReadyException.class)
+    public ProblemDetail handleTranslationNotReady(TranslationNotReadyException ex) {
+        ProblemDetail problem = ApiProblem.of(HttpStatus.CONFLICT, "Tłumaczenie niegotowe",
+                ex.getMessage(), "TRANSLATION_NOT_READY");
+        problem.setProperty("status", ex.getStatus());
+        return problem;
+    }
+
+    @ExceptionHandler(TranslationQuotaExceededException.class)
+    public ProblemDetail handleTranslationQuota(TranslationQuotaExceededException ex) {
+        ProblemDetail problem = ApiProblem.of(HttpStatus.TOO_MANY_REQUESTS, "Limit wyczerpany",
+                ex.getMessage(), "TRANSLATION_QUOTA_EXCEEDED");
+        problem.setProperty("remainingChars", ex.getRemainingChars());
+        return problem;
+    }
+
+    /**
      * Siatka bezpieczeństwa na naruszenia więzów bazy (np. wyścig przy równoczesnej
      * rejestracji tego samego emaila, którego nie złapie wcześniejsze sprawdzenie).
      */
@@ -185,6 +232,52 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         problem.setProperty("errors", errors);
 
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(problem);
+    }
+
+    /**
+     * Przekroczony rozmiar wgrywanego pliku. Rzucane przy parsowaniu multiparta, czyli
+     * PRZED wejściem do kontrolera - dlatego nie da się tego sprawdzić w walidacji uploadu.
+     *
+     * NADPISANIE metody bazowej, a nie własny @ExceptionHandler: ResponseEntityExceptionHandler
+     * sam deklaruje obsługę tego wyjątku, więc drugie mapowanie na ten sam typ wywala
+     * kontekst przy starcie ("Ambiguous @ExceptionHandler method mapped for..."). Ta sama
+     * pułapka czeka przy każdym wyjątku, który Spring MVC już zna.
+     *
+     * 413, a nie 400: klient ma wiedzieć, że problem jest w rozmiarze, a nie w treści.
+     */
+    @Override
+    protected ResponseEntity<Object> handleMaxUploadSizeExceededException(MaxUploadSizeExceededException ex,
+                                                                          HttpHeaders headers,
+                                                                          HttpStatusCode status,
+                                                                          WebRequest request) {
+        log.warn("Odrzucono przesłany plik - przekroczony rozmiar");
+        ProblemDetail problem = ApiProblem.of(HttpStatus.PAYLOAD_TOO_LARGE, "Plik za duży",
+                "Przesłany plik przekracza dopuszczalny rozmiar", "FILE_TOO_LARGE");
+        return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE).body(problem);
+    }
+
+    /**
+     * Parametr żądania nie dał się przekonwertować na oczekiwany typ.
+     *
+     * Nadpisane głównie dla targetLang: domyślna odpowiedź Springa mówi "nieprawidłowa
+     * wartość" i nie zdradza, co wolno podać, więc użytkownik musi zgadywać albo szukać
+     * w dokumentacji. Przy typie wyliczeniowym lista dopuszczalnych wartości jest znana
+     * z definicji - nie ma powodu jej ukrywać.
+     */
+    @Override
+    protected ResponseEntity<Object> handleTypeMismatch(TypeMismatchException ex,
+                                                        HttpHeaders headers,
+                                                        HttpStatusCode status,
+                                                        WebRequest request) {
+        if (TargetLanguage.class.equals(ex.getRequiredType())) {
+            log.warn("Nieobsługiwany język docelowy w żądaniu");
+            ProblemDetail problem = ApiProblem.of(HttpStatus.BAD_REQUEST, "Nieobsługiwany język",
+                    "Nieobsługiwany język docelowy. Dozwolone wartości: " + TargetLanguage.allowedValues(),
+                    "UNSUPPORTED_TARGET_LANGUAGE");
+            problem.setProperty("allowed", TargetLanguage.values());
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(problem);
+        }
+        return super.handleTypeMismatch(ex, headers, status, request);
     }
 
     /**

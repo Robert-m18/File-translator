@@ -17,7 +17,16 @@ public enum MailTemplate {
 
     VERIFICATION("email"),
     PASSWORD_RESET("password-reset"),
-    ACCOUNT_EXISTS("account-exists");
+    ACCOUNT_EXISTS("account-exists"),
+    /**
+     * Zlecenie tłumaczenia zostało wykonane. Jedyny mail w tym zestawie, który nie dotyczy
+     * konta - i jedyny, którego payload NIE niesie sekretu, tylko nazwę pliku.
+     *
+     * Nie ma odpowiednika dla porażki i to jest decyzja: awaria dostawcy wywraca wszystkie
+     * zlecenia naraz, więc mail o niepowodzeniu zamieniłby jedną awarię w lawinę wiadomości.
+     * Uzasadnienie w TranslationEvents.
+     */
+    TRANSLATION_DONE("translation-done");
 
     private final String templateName;
 

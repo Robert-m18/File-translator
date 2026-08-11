@@ -4,6 +4,7 @@
  */
 package com.example.robert.notification;
 
+import com.example.robert.common.time.DbClock;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -74,10 +75,10 @@ public class OutboxCleanupJob {
      */
     @Transactional
     public int removeSentOlderThanRetention() {
-        // Obcięcie do precyzji kolumny tą samą drogą co reszta skrzynki nadawczej (OutboxClock).
+        // Obcięcie do precyzji kolumny tą samą drogą co reszta skrzynki nadawczej (DbClock).
         // Przy granicy odliczanej o dobę wstecz zaokrąglenie o pół mikrosekundy nie ma
         // znaczenia, ale jedno źródło czasu dla całej funkcji jest warte więcej niż wyjątek.
-        Instant cutoff = OutboxClock.now().minus(properties.retention());
+        Instant cutoff = DbClock.now().minus(properties.retention());
         return repository.deleteSentBefore(cutoff);
     }
 }

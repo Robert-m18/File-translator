@@ -261,6 +261,11 @@ Każdy błąd to `application/problem+json`:
 | POST | `/auth/logout` | publiczny | Unieważnia rodzinę tokenów i czyści ciasteczka |
 | POST | `/auth/forgot-password` | publiczny | Wysyła link resetu — identyczna odpowiedź dla adresu znanego i nieznanego |
 | POST | `/auth/reset-password` | token z maila | Ustawia nowe hasło, unieważnia wszystkie sesje |
+| POST | `/translations` | **zalogowany** | Zlecenie tłumaczenia pliku `.txt` (`multipart/form-data`) — `202` z identyfikatorem |
+| GET | `/translations` | **zalogowany** | Lista **własnych** zleceń, stronicowana, bez treści plików |
+| GET | `/translations/{id}` | **właściciel** | Status zlecenia |
+| GET | `/translations/{id}/content` | **właściciel** | Przetłumaczony plik (`text/plain`, `Content-Disposition: attachment`) |
+| DELETE | `/translations/{id}` | **właściciel** | Usuwa zlecenie razem z treścią |
 | GET | `/actuator/health`, `/actuator/info` | publiczny | Health check i probe'y dla orkiestratora |
 | GET | `/actuator/metrics`, `/actuator/prometheus` | `ROLE_ADMIN` | Metryki |
 
@@ -270,6 +275,47 @@ Pełna specyfikacja: `/swagger-ui.html` (wyłączone na profilu `prod`).
 wywoływał. Reguła `/users/** → ROLE_ADMIN` została w `SecurityConfig` celowo: domyślna odmowa
 jest właściwym stanem wyjściowym, więc gdy kontroler wróci, jego endpointy będą chronione od
 pierwszego commitu, a nie dopiero po tym, jak ktoś zauważy, że są otwarte.
+
+### Tłumaczenie plików
+
+Przetwarzanie jest **asynchroniczne**: `POST /translations` zapisuje zlecenie i odpowiada `202`,
+a tłumaczy je worker w tle. Klient odpytuje `GET /translations/{id}`, aż status przestanie być
+`PENDING`/`PROCESSING`. Po zakończeniu właściciel dostaje maila (bez treści tłumaczenia).
+
+```bash
+# 1. zlecenie (potrzebne ciasteczka z logowania i nagłówek CSRF)
+curl -b jar -H "X-XSRF-TOKEN: $TOKEN" \
+     -F "file=@lista.txt" -F "targetLang=EN_GB" \
+     http://localhost:2009/translations
+
+# 2. status  ->  {"status":"DONE", ...}
+curl -b jar http://localhost:2009/translations/1
+
+# 3. pobranie wyniku jako plik
+curl -b jar -OJ http://localhost:2009/translations/1/content
+```
+
+| Ograniczenie | Wartość | Skąd się bierze |
+|---|---|---|
+| Rozmiar pliku | 256 KB | darmowy próg DeepL to 500 tys. znaków **miesięcznie na konto** — plik 1 MB wyczerpałby go dwukrotnie |
+| Format | wyłącznie `.txt`, UTF-8 | decyduje rozszerzenie i dekodowanie bajtów, nie nagłówek `Content-Type` od klienta |
+| Znaki na dobę | 50 000 na użytkownika | limit dostawcy liczy się dla całego konta, więc jedna osoba mogłaby odciąć wszystkie pozostałe |
+| Żądań `POST` | 30/h z adresu IP | reguła limitera zawężona do metody — odpytywanie o status jest darmowe i nie zużywa puli |
+| Retencja | 30 dni od zlecenia | w bazie leżą **pliki użytkowników**; `DELETE` pozwala usunąć je wcześniej |
+
+**Dostawca tłumaczenia jest wymienny** (`app.translation.provider`):
+
+| Wartość | Co robi | Kiedy |
+|---|---|---|
+| `echo` (domyślnie) | oznacza każdą linię kodem języka, nic nie wysyła na zewnątrz | testy, CI, `docker compose` bez konta u dostawcy |
+| `deepl` | prawdziwe tłumaczenie przez DeepL API | wymaga `DEEPL_API_KEY` |
+
+```bash
+TRANSLATION_PROVIDER=deepl DEEPL_API_KEY=xxx docker compose up -d
+```
+
+Konta **darmowe** używają hosta `api-free.deepl.com`, płatne `api.deepl.com` — pomyłka kończy
+się odpowiedzią `403`, która wygląda jak nieprawidłowy klucz.
 
 ### Dostęp administracyjny
 
@@ -346,5 +392,5 @@ który został już gdziekolwiek wykonany.
 | 5 | Logowanie kodem jednorazowym / magic link | ⏳ |
 | 6 | Logowanie przez Google (OAuth2) | ⏳ |
 | 7 | Testy integracyjne na Testcontainers | ⏳ |
-| 8 | Translator plików — MVP (upload, kolejka zadań, tłumaczenie, pobranie) | ⏳ |
-| 9 | Translator v2 (PDF/XLSX, SSE, limity, cache, metryki) | ⏳ |
+| 8 | Translator plików — MVP (upload `.txt`, kolejka zadań, tłumaczenie, pobranie, mail) | ✅ |
+| 9 | Translator v2 (PDF/XLSX, SSE zamiast odpytywania, cache tłumaczeń) | ⏳ |

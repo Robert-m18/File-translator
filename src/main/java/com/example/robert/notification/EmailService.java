@@ -79,6 +79,24 @@ public class EmailService {
     }
 
     /**
+     * Zlecenie tłumaczenia jest gotowe do pobrania.
+     *
+     * Mail niesie NAZWĘ pliku i link do listy zleceń - nigdy treści tłumaczenia. Powód jest
+     * ten sam, dla którego payload skrzynki nadawczej nie może nieść sekretów: wiadomość
+     * przechodzi przez serwery, na które nie mamy wpływu, i zostaje w skrzynce odbiorcy
+     * bezterminowo, czyli dłużej niż retencja samego zlecenia po naszej stronie.
+     */
+    public void sendTranslationDoneEmail(String toEmail, String name, String filename) {
+        Context context = new Context();
+        context.setVariable("name", name);
+        context.setVariable("filename", filename);
+        context.setVariable("translationsLink", frontendUrl + "/translations");
+
+        send(toEmail, "Twoje tłumaczenie jest gotowe", "translation-done", context,
+                "o gotowym tłumaczeniu");
+    }
+
+    /**
      * Wspólna wysyłka. Synchroniczna i RZUCAJĄCA wyjątek przy porażce.
      *
      * Jedno i drugie jest tu istotne. Wcześniej metody były @Async, a wyjątek był łapany
