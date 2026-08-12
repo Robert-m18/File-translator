@@ -1,5 +1,6 @@
 package com.example.robert.translation;
 
+import com.example.robert.common.security.TokenHasher;
 import com.example.robert.translation.model.TargetLanguage;
 import com.example.robert.translation.model.TranslationJob;
 import com.example.robert.translation.model.TranslationStatus;
@@ -80,7 +81,8 @@ class TranslationWorkerTest {
 
     private TranslationJob newJob(String content) {
         return jobRepository.save(new TranslationJob(
-                owner, "plik.txt", TargetLanguage.EN_GB, content, DbClock.now()));
+                owner, "plik.txt", TargetLanguage.EN_GB, content,
+                TokenHasher.sha256Hex(content), DbClock.now()));
     }
 
     /**

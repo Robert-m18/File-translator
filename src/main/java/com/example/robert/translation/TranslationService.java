@@ -59,11 +59,27 @@ public class TranslationService {
     @Transactional
     public TranslationJobResponse submit(User owner, UploadedTextFile file, TargetLanguage targetLang) {
         Instant now = DbClock.now();
+        String contentHash = file.contentHash();
 
-        enforceDailyQuota(owner, file.content().length(), now);
+        /*
+         * Dobowy limit znaków chroni KONTO U DOSTAWCY, a zlecenie, które zostanie zaspokojone
+         * z cache'a, nie kosztuje tam ani znaku - naliczanie go byłoby karą za operację, która
+         * nic nie kosztuje.
+         *
+         * Wygląda to na dziurę: ten sam plik w pętli przechodziłby bez limitu w nieskończoność.
+         * Zamyka ją limiter żądań, który ma na POST /translations osobną politykę (30/h,
+         * application.yml), więc sufit takiej pętli to 30 zleceń na godzinę. Bez tego zdania
+         * pominięcie limitu czyta się jak przeoczenie, a nie jak decyzja.
+         *
+         * Sprawdzenie jest tanie: existsCached idzie po indeksie idx_translation_jobs_cache
+         * i NIE czyta treści wyniku. Samo kopiowanie wyniku dzieje się później, w workerze.
+         */
+        if (!repository.existsCached(owner.getId(), contentHash, targetLang, properties.provider())) {
+            enforceDailyQuota(owner, file.content().length(), now);
+        }
 
         TranslationJob job = repository.save(new TranslationJob(
-                owner, file.filename(), targetLang, file.content(), now));
+                owner, file.filename(), targetLang, file.content(), contentHash, now));
 
         // Zestawiony z translation.jobs.finished daje długość kolejki bez odpytywania bazy:
         // rozjazd między tymi dwoma licznikami to zlecenia, które utknęły.

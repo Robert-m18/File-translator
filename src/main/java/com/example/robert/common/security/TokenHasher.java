@@ -12,6 +12,11 @@ import java.util.HexFormat;
 /**
  * Liczy SHA-256 tokenu zapisywany w bazie.
  *
+ * MIMO NAZWY służy też do czegoś drugiego: UploadedTextFile liczy nią odcisk treści wgranego
+ * pliku pod deduplikację tłumaczeń. Nazwa została, bo tokeny są tu głównym zastosowaniem,
+ * a przemianowanie ruszyłoby cały moduł auth przy okazji niezwiązanej zmiany. Istotne jest to,
+ * że algorytm ma w projekcie DOKŁADNIE jedno miejsce - druga kopia rozjechałaby się po cichu.
+ *
  * Zasada: w bazie nigdy nie leży token, którym da się posłużyć. Trzymamy jego skrót,
  * a przy weryfikacji hashujemy to, co przyszło od klienta, i porównujemy hashe.
  * Wyciek dumpu bazy nie daje wtedy działających tokenów.

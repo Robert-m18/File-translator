@@ -5,8 +5,11 @@
 package com.example.robert.translation.repository;
 
 import com.example.robert.translation.TranslationCompletedEvent;
+import com.example.robert.translation.TranslationProperties;
+import com.example.robert.translation.dto.TranslationCacheHit;
 import com.example.robert.translation.dto.TranslationJobResponse;
 import com.example.robert.translation.dto.TranslationResultView;
+import com.example.robert.translation.model.TargetLanguage;
 import com.example.robert.translation.model.TranslationJob;
 import jakarta.persistence.LockModeType;
 import jakarta.persistence.QueryHint;
@@ -102,6 +105,7 @@ public interface TranslationJobRepository extends JpaRepository<TranslationJob, 
             set j.status = com.example.robert.translation.model.TranslationStatus.DONE,
                 j.resultContent = :result,
                 j.sourceLang = :sourceLang,
+                j.provider = :provider,
                 j.completedAt = :now,
                 j.lastError = null
             where j.id = :id
@@ -109,6 +113,7 @@ public interface TranslationJobRepository extends JpaRepository<TranslationJob, 
     int markDone(@Param("id") Long id,
                  @Param("result") String result,
                  @Param("sourceLang") String sourceLang,
+                 @Param("provider") TranslationProperties.Provider provider,
                  @Param("now") Instant now);
 
     /** Porażka, ale próbujemy dalej - wiersz wraca do PENDING z odsuniętym next_attempt_at. */
@@ -202,6 +207,74 @@ public interface TranslationJobRepository extends JpaRepository<TranslationJob, 
             where j.user.id = :userId and j.createdAt >= :since
             """)
     long sumCharCountSince(@Param("userId") Long userId, @Param("since") Instant since);
+
+    /**
+     * Czy użytkownik ma już gotowe tłumaczenie tej treści - sam fakt, bez treści wyniku.
+     *
+     * To zapytanie leci na ŚCIEŻCE ŻĄDANIA (TranslationService.submit sprawdza nim, czy
+     * naliczyć dobowy limit znaków), więc nie wolno mu wciągać result_content: odpowiedź
+     * "tak" nie jest warta ćwierci megabajta tekstu przeczytanego z dysku. Od kopiowania
+     * wyniku jest findCached, wołane później i już poza żądaniem.
+     *
+     * Klucz to userId + odcisk + język docelowy + DOSTAWCA. Ten ostatni nie jest ozdobą:
+     * bez niego wynik atrapy (ECHO) zaspokoiłby zlecenie kierowane do DEEPL - jedyny
+     * przypadek, w którym deduplikacja oddaje wynik błędny zamiast szybkiego.
+     */
+    @Query("""
+            select count(j) > 0 from TranslationJob j
+            where j.user.id = :userId
+              and j.contentHash = :contentHash
+              and j.targetLang = :targetLang
+              and j.provider = :provider
+              and j.status = com.example.robert.translation.model.TranslationStatus.DONE
+              and j.resultContent is not null
+            """)
+    boolean existsCached(@Param("userId") Long userId,
+                         @Param("contentHash") String contentHash,
+                         @Param("targetLang") TargetLanguage targetLang,
+                         @Param("provider") TranslationProperties.Provider provider);
+
+    /**
+     * Gotowy wynik do przepisania na zlecenie o podanym id.
+     *
+     * KLUCZ BIERZE SIĘ Z SAMEGO WIERSZA ZLECENIA (złączenie po user_id, content_hash
+     * i target_lang), a nie z parametrów podanych przez wołającego. Powód jest ten sam,
+     * dla którego istnieje findCompletedEvent: encja, którą trzyma worker, pochodzi
+     * z ZAMKNIĘTEJ transakcji rezerwacji, więc job.getUser() jest tam martwym proxy -
+     * sięgnięcie po identyfikator właściciela działa tylko przez szczegół implementacyjny
+     * Hibernate'a i jest dokładnie tą pułapką, którą ten pakiet już raz rozbroił.
+     *
+     * Warunki na status, provider i treść muszą pozostać takie same jak w existsCached.
+     * Rozjazd między nimi znaczyłby, że dobowy limit znaków pomijamy na podstawie trafienia,
+     * którego potem nie ma - czyli zlecenie przyjęte jako darmowe idzie jednak do dostawcy.
+     *
+     * done.id <> job.id jest asekuracją: zlecenie w trakcie ma status PROCESSING, więc samo
+     * siebie i tak nie zaspokoi, ale ponowne przepuszczenie wiersza już zakończonego nie ma
+     * prawa zamienić się w kopiowanie wyniku z samego siebie.
+     *
+     * Wiersze sprzed changesetu 0008 mają content_hash równy NULL, a NULL nie równa się
+     * niczemu - nigdy nie trafią i nie trzeba ich osobno wykluczać.
+     *
+     * List + Limit, bo JPQL nie ma "pierwszego" - ten sam idiom co w findClaimable.
+     */
+    @Query("""
+            select new com.example.robert.translation.dto.TranslationCacheHit(
+                done.resultContent, done.sourceLang)
+            from TranslationJob job
+            join TranslationJob done
+              on done.user.id = job.user.id
+             and done.contentHash = job.contentHash
+             and done.targetLang = job.targetLang
+            where job.id = :jobId
+              and done.id <> job.id
+              and done.provider = :provider
+              and done.status = com.example.robert.translation.model.TranslationStatus.DONE
+              and done.resultContent is not null
+            order by done.id desc
+            """)
+    List<TranslationCacheHit> findCachedFor(@Param("jobId") Long jobId,
+                                            @Param("provider") TranslationProperties.Provider provider,
+                                            Limit limit);
 
     /** Kasowanie własnego zlecenia - userId w warunku, żeby nie dało się skasować cudzego. */
     @Modifying(clearAutomatically = true, flushAutomatically = true)

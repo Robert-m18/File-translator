@@ -1,5 +1,6 @@
 package com.example.robert.translation;
 
+import com.example.robert.common.security.TokenHasher;
 import com.example.robert.common.time.DbClock;
 import com.example.robert.translation.model.TargetLanguage;
 import com.example.robert.translation.model.TranslationJob;
@@ -66,7 +67,8 @@ class TranslationRetentionTest {
      */
     private Long jobCreatedAgo(Duration age, TranslationStatus status) {
         TranslationJob job = jobRepository.save(new TranslationJob(
-                owner, "plik.txt", TargetLanguage.EN_GB, "Ala ma kota", DbClock.now()));
+                owner, "plik.txt", TargetLanguage.EN_GB, "Ala ma kota",
+                TokenHasher.sha256Hex("Ala ma kota"), DbClock.now()));
 
         jdbcTemplate.update("update translation_jobs set created_at = ?, status = ? where id = ?",
                 sql(Instant.now().minus(age)), status.name(), job.getId());

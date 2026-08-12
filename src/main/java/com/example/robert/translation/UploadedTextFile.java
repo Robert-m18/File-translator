@@ -4,6 +4,7 @@
  */
 package com.example.robert.translation;
 
+import com.example.robert.common.security.TokenHasher;
 import com.example.robert.translation.exception.InvalidUploadException;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -67,6 +68,25 @@ public record UploadedTextFile(String filename, String content) {
         }
 
         return new UploadedTextFile(filename, content);
+    }
+
+    /**
+     * Odcisk treści pod deduplikację - ten sam plik wgrany ponownie ma dać ten sam skrót.
+     *
+     * Metoda, a nie komponent rekordu: liczy się ją raz, przy przyjmowaniu zlecenia, i nie ma
+     * powodu, żeby jechała w każdym miejscu, które ten rekord tylko przenosi.
+     *
+     * Skrót liczy TokenHasher, a nie prywatna kopia MessageDigest w tym pakiecie. To nie jest
+     * upodobanie: AuthService miał kiedyś własną kopię tego samego algorytmu obok wspólnej
+     * klasy i obie ścieżki rozjechałyby się po cichu przy pierwszej zmianie jednej z nich.
+     *
+     * Uwaga na zakres: liczymy skrót z treści DOKŁADNIE takiej, jaka pójdzie do tłumaczenia -
+     * bez normalizacji końców linii, BOM-u czy końcowej pustej linii. Plik różniący się samym
+     * CRLF-em da inny odcisk i po prostu spudłuje. Normalizacja zmieniałaby to, co wysyłamy
+     * do dostawcy, więc jest osobną decyzją, a nie szczegółem deduplikacji.
+     */
+    public String contentHash() {
+        return TokenHasher.sha256Hex(content);
     }
 
     /**

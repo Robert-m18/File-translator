@@ -38,5 +38,6 @@
     <include file="db/changelog/changes/0005-mail-outbox.xml"/>
     <include file="db/changelog/changes/0006-timestamps-with-time-zone.xml"/>
     <include file="db/changelog/changes/0007-translation-jobs.xml"/>
+    <include file="db/changelog/changes/0008-translation-content-hash.xml"/>
 
 </databaseChangeLog>
