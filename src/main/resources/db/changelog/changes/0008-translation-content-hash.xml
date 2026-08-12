@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="0008-01-translation-content-hash" author="robert">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <columnExists tableName="translation_jobs" columnName="content_hash"/>
+            </not>
+        </preConditions>
+
+        <!--
+            Odcisk treści i dostawca, który wyprodukował wynik - razem tworzą klucz
+            deduplikacji.
+
+            PO CO: ten sam plik wgrany dwa razy był tłumaczony dwa razy i PŁACONY dwa razy.
+            U dostawcy płaci się za znaki, a darmowy próg DeepL liczy się dla całego konta,
+            więc powtórki wyjadają budżet wspólny dla wszystkich użytkowników. Mając odcisk
+            treści, drugie zlecenie kopiuje gotowy wynik zamiast wołać API.
+
+            CACHE'EM JEST TA TABELA, nie osobna. Powód nie jest oszczędnościowy, tylko dotyczy
+            prywatności: source_content i result_content to PLIKI UŻYTKOWNIKA, a osobna tabela
+            byłaby drugim miejscem, które je trzyma - z własną retencją do napisania i do
+            zapomnienia. Tak jak jest, DELETE /translations/{id} i TranslationCleanupJob
+            czyszczą cache automatycznie, bo czyszczą właśnie te wiersze.
+        -->
+
+        <!--
+            VARCHAR, a nie CHAR(64): na PostgreSQL CHAR to bpchar dopełniany spacjami do pełnej
+            długości, o innej semantyce porównania niż varchar, a Hibernate mapuje String na
+            varchar - ddl-auto: validate i same porównania robiłyby się wtedy subtelnie inne
+            na obu silnikach. Długość 64 to SHA-256 zapisany szesnastkowo (TokenHasher).
+
+            NULLABLE, i to jest świadome: SHA-256 nie da się policzyć w przenośnym SQL-u, więc
+            wierszy sprzed tej zmiany nie ma jak wypełnić. Nie trafiają one w cache i znikają
+            same wraz z retencją - stan przejściowy, który leczy się bez niczyjego udziału.
+        -->
+        <addColumn tableName="translation_jobs">
+            <column name="content_hash" type="VARCHAR(64)"/>
+        </addColumn>
+
+        <!--
+            Który dostawca faktycznie wyprodukował wynik. Wypełniany dopiero przy zapisie
+            wyniku, bo wcześniej nie wiadomo - stąd nullable.
+
+            TO JEST CZĘŚĆ KLUCZA, NIE METADANA. Bez niej przełączenie app.translation.provider
+            z echo na deepl oddawałoby wyjście ATRAPY jako prawdziwe tłumaczenie: treść i język
+            docelowy się zgadzają, więc wiersz wyglądałby na poprawne trafienie. To jedyny
+            scenariusz, w którym deduplikacja daje wynik BŁĘDNY, a nie tylko wolny.
+        -->
+        <addColumn tableName="translation_jobs">
+            <column name="provider" type="VARCHAR(20)"/>
+        </addColumn>
+
+        <!--
+            Pod odczyt cache'a. Trzy kolumny wystarczą: para użytkownik + odcisk jest już
+            skrajnie selektywna (użytkownik ma najwyżej kilka zleceń o tej samej treści),
+            więc status i provider taniej odfiltrować po odczycie indeksu niż pogrubiać go
+            o dwie kolumny wchodzące do KAŻDEGO wpisu.
+
+            user_id na pierwszym miejscu, bo tak samo jak wszystkie pozostałe odczyty w tym
+            pakiecie zapytanie cache'a bierze userId do WHERE - zasięg jest per użytkownik,
+            trafienie nigdy nie pochodzi z cudzego pliku.
+        -->
+        <createIndex indexName="idx_translation_jobs_cache" tableName="translation_jobs">
+            <column name="user_id"/>
+            <column name="content_hash"/>
+            <column name="target_lang"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

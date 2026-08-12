@@ -1,5 +1,6 @@
 package com.example.robert.translation;
 
+import com.example.robert.common.security.TokenHasher;
 import com.example.robert.common.time.DbClock;
 import com.example.robert.notification.MailOutbox;
 import com.example.robert.notification.OutboxMessageRepository;
@@ -82,7 +83,8 @@ class TranslationNotificationTest {
 
     private TranslationJob newJob() {
         return jobRepository.save(new TranslationJob(
-                owner, "raport.txt", TargetLanguage.DE, "Ala ma kota", DbClock.now()));
+                owner, "raport.txt", TargetLanguage.DE, "Ala ma kota",
+                TokenHasher.sha256Hex("Ala ma kota"), DbClock.now()));
     }
 
     @Test

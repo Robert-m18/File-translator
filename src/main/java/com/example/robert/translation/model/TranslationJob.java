@@ -4,6 +4,7 @@
  */
 package com.example.robert.translation.model;
 
+import com.example.robert.translation.TranslationProperties;
 import com.example.robert.user.model.User;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -77,6 +78,27 @@ public class TranslationJob {
     @Column(name = "result_content", length = 524_288)
     private String resultContent;
 
+    /**
+     * SHA-256 treści źródłowej, szesnastkowo - odcisk pod deduplikację.
+     *
+     * Nullable wyłącznie ze względu na wiersze sprzed changesetu 0008: skrótu nie da się
+     * policzyć w przenośnym SQL-u, więc nie było czym ich wypełnić. Każde nowe zlecenie
+     * ma go ustawionego w konstruktorze.
+     */
+    @Column(name = "content_hash", length = 64)
+    private String contentHash;
+
+    /**
+     * Dostawca, który wyprodukował wynik - znany dopiero przy zapisie, stąd NULL do tego czasu.
+     *
+     * Wchodzi do klucza deduplikacji razem z odciskiem treści i językiem docelowym. Bez niego
+     * gotowe zlecenie wykonane przez atrapę (ECHO) zaspokoiłoby zlecenie kierowane do DEEPL -
+     * jedyny przypadek, w którym cache oddaje wynik BŁĘDNY, a nie tylko szybki.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "provider", length = 20)
+    private TranslationProperties.Provider provider;
+
     /** Liczba znaków źródła - pod dobowy limit użytkownika, bez czytania całej treści. */
     @Column(name = "char_count", nullable = false)
     private int charCount;
@@ -107,11 +129,13 @@ public class TranslationJob {
                           String originalFilename,
                           TargetLanguage targetLang,
                           String sourceContent,
+                          String contentHash,
                           Instant now) {
         this.user = user;
         this.originalFilename = originalFilename;
         this.targetLang = targetLang;
         this.sourceContent = sourceContent;
+        this.contentHash = contentHash;
         this.charCount = sourceContent.length();
         this.status = TranslationStatus.PENDING;
         this.attempts = 0;

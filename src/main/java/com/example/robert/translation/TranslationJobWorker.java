@@ -5,6 +5,7 @@
 package com.example.robert.translation;
 
 import com.example.robert.common.time.DbClock;
+import com.example.robert.translation.dto.TranslationCacheHit;
 import com.example.robert.translation.model.TranslationJob;
 import com.example.robert.translation.provider.TranslationProvider;
 import com.example.robert.translation.provider.TranslationProviderException;
@@ -25,6 +26,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -173,13 +175,48 @@ public class TranslationJobWorker {
         long startedAt = System.nanoTime();
 
         try {
+            /*
+             * Deduplikacja: ta sama treść, ten sam język docelowy i ten sam dostawca u tego
+             * samego użytkownika = wynik już istnieje i nie ma po co płacić za niego drugi raz.
+             *
+             * Odczyt jest TUTAJ, a nie przy przyjmowaniu zlecenia, bo tu i tak jesteśmy poza
+             * wątkiem HTTP - przepisanie ćwierci megabajta tekstu nie obciąża czasu odpowiedzi.
+             * Przy przyjmowaniu sprawdzamy jedynie SAM FAKT trafienia (existsCached), żeby nie
+             * naliczać dobowego limitu za coś, co nic nie kosztuje.
+             *
+             * Świadomie nie ma tu ochrony przed wyścigiem: dwa identyczne pliki zlecone w tej
+             * samej chwili trafią do jednej paczki, oba spudłują i oba zawołają dostawcę.
+             * Zamknięcie tego wymagałoby blokady na odcisku, czyli szeregowania zleceń - cena
+             * wyraźnie wyższa niż jedno tłumaczenie w rzadkim przypadku.
+             */
+            Optional<TranslationCacheHit> cached = findCached(job);
+
+            if (cached.isPresent()) {
+                markDone(job, new TranslationResult(
+                        cached.get().resultContent(), cached.get().sourceLang()));
+
+                countOutcome("done");
+                countCache("hit");
+                // Znaki, których NIE wydaliśmy. Zestawione z translation.chars.translated
+                // odpowiadają na jedyne pytanie, jakie ta funkcja stawia: czy się opłaciła.
+                meters.counter("translation.chars.saved").increment(job.getCharCount());
+
+                log.info("Zlecenie zaspokojone z cache'a, bez wywołania dostawcy "
+                                + "(id={}, znaków={}, język={})",
+                        job.getId(), job.getCharCount(), job.getTargetLang());
+                return true;
+            }
+            countCache("miss");
+
             TranslationResult result = timeProviderCall(() ->
                     provider.translate(job.getSourceContent(), job.getTargetLang()));
             markDone(job, result);
 
             countOutcome("done");
             // Znaki, a nie zlecenia: u dostawcy płaci się za znaki, więc to jest jedyna
-            // metryka, z której da się odczytać, jak blisko limitu konta jesteśmy.
+            // metryka, z której da się odczytać, jak blisko limitu konta jesteśmy. Trafienie
+            // w cache CELOWO jej nie podbija - inaczej licznik przestałby znaczyć "znaki
+            // faktycznie wydane" i nie dałoby się z niego odczytać stanu konta u dostawcy.
             meters.counter("translation.chars.translated").increment(job.getCharCount());
 
             log.info("Przetłumaczono zlecenie (id={}, znaków={}, język={}, podejście={}, czas={}ms)",
@@ -209,10 +246,26 @@ public class TranslationJobWorker {
      * Zamówienie maila poza tą transakcją znaczyłoby, że wycofany zapis wyniku zostawia
      * użytkownikowi wiadomość "tłumaczenie gotowe" prowadzącą do zlecenia, które dalej czeka.
      */
+    /**
+     * Szuka gotowego wyniku dla tej samej treści, języka i dostawcy u tego samego użytkownika.
+     *
+     * Własna krótka transakcja, bo worker nie ma żadnej otaczającej. Zapytanie wyprowadza klucz
+     * z samego wiersza zlecenia - uzasadnienie przy findCachedFor.
+     */
+    private Optional<TranslationCacheHit> findCached(TranslationJob job) {
+        List<TranslationCacheHit> hits = shortTransaction.execute(status ->
+                repository.findCachedFor(job.getId(), properties.provider(), Limit.of(1)));
+
+        return hits == null || hits.isEmpty() ? Optional.empty() : Optional.of(hits.get(0));
+    }
+
     private void markDone(TranslationJob job, TranslationResult result) {
         shortTransaction.execute(status -> {
+            // Dostawca zapisywany razem z wynikiem, bo dopiero teraz wiadomo, kto go wykonał.
+            // Wchodzi do klucza deduplikacji: bez niego wynik atrapy zaspokoiłby zlecenie
+            // kierowane do prawdziwego dostawcy.
             repository.markDone(job.getId(), result.translatedText(),
-                    result.detectedSourceLanguage(), DbClock.now());
+                    result.detectedSourceLanguage(), properties.provider(), DbClock.now());
             // Dane do powiadomienia biorą się z osobnego zapytania, a nie z job.getUser():
             // encja pochodzi z zamkniętej już transakcji rezerwacji, więc leniwe pole user
             // jest tam martwym proxy. Szczegóły przy findCompletedEvent.
@@ -288,6 +341,14 @@ public class TranslationJobWorker {
      */
     private void countOutcome(String outcome) {
         meters.counter("translation.jobs.finished", "outcome", outcome).increment();
+    }
+
+    /**
+     * Skuteczność deduplikacji. Tag zamiast dwóch liczników, bo interesujący jest ILORAZ -
+     * sam licznik trafień nie mówi, czy to dużo.
+     */
+    private void countCache(String result) {
+        meters.counter("translation.cache", "result", result).increment();
     }
 
     /** Kolumna last_error ma 500 znaków - dłuższy komunikat wywaliłby zapis wyniku. */
