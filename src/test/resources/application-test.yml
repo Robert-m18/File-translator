@@ -26,6 +26,36 @@ spring:
     driver-class-name: org.h2.Driver
     username: sa
     password: ""
+    # Pula połączeń przycięta DLA TESTÓW - na H2 bez znaczenia, na PostgreSQL-u warunek
+    # tego, żeby suite w ogóle wstała.
+    #
+    # Spring CACHE'UJE konteksty testowe i nie zamyka ich do końca JVM-a, a każdy kontekst
+    # trzyma własną pulę Hikari. Domyślnie to 10 połączeń, otwieranych OD RAZU i trzymanych
+    # bezczynnie, bo minimum-idle domyślnie równa się maximum-pool-size. Kontekstów jest
+    # kilkanaście - różnicuje je nie tylko @TestPropertySource, ale też każdy inny zestaw
+    # @MockitoBean - więc przy max_connections = 100 (domyślne w postgres:17-alpine, czyli
+    # i w jobie "integration") budżet kończy się przy jedenastym kontekście.
+    #
+    # Objaw jest mylący i dlatego ten komentarz jest tak długi: pada "Failed to load
+    # ApplicationContext" w KLASIE, która akurat wstawała jako pierwsza po wyczerpaniu
+    # budżetu, więc log wskazuje przypadkowy test. Trafione 2026-08-13 - na CI padł
+    # CsrfLifecycleTest, przy odtworzeniu lokalnie TranslationQuotaTest i
+    # TranslationWorkerTest, przy identycznym kodzie. NAZWA TESTU WSKAZUJE MOMENT, NIE
+    # PRZYCZYNĘ. Prawdziwy komunikat siedzi dopiero w ostatnim "Caused by":
+    # org.postgresql.util.PSQLException: FATAL: sorry, too many clients already.
+    #
+    # minimum-idle: 0 jest tu ważniejsze niż sam rozmiar puli - bez tego każdy kontekst
+    # zajmuje komplet połączeń, nawet jeśli jego testy dawno się skończyły. idle-timeout
+    # oddaje je z powrotem (10 s to minimum, jakie Hikari przyjmuje).
+    #
+    # Piątka, a nie mniej: OutboxTest.publish_shouldSendBatchInParallel trzyma na barierze
+    # wszystkie wątki paczki naraz (app.outbox.concurrency, domyślnie 4), a każdy ma własną
+    # transakcję REQUIRES_NEW. Pula mniejsza niż równoległość zamieniłaby ten test w zakleszczenie
+    # czekające na connection-timeout.
+    hikari:
+      maximum-pool-size: 5
+      minimum-idle: 0
+      idle-timeout: 10000
   jpa:
     hibernate:
       ddl-auto: validate
