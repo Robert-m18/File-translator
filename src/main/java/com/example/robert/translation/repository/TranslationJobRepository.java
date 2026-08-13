@@ -99,6 +99,13 @@ public interface TranslationJobRepository extends JpaRepository<TranslationJob, 
               @Param("now") Instant now,
               @Param("reservedUntil") Instant reservedUntil);
 
+    /**
+     * billedChars zapisywane RAZEM z wynikiem, bo dopiero tutaj wiadomo, czy dostawca był
+     * wołany. Wartość ustawiona przy przyjęciu zlecenia jest tylko przewidywaniem: gotowy
+     * wiersz mógł w międzyczasie zostać skasowany przez użytkownika albo wygaszony przez
+     * retencję, a wtedy zlecenie przewidziane jako darmowe jednak poszło do dostawcy i musi
+     * zostać naliczone.
+     */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""
             update TranslationJob j
@@ -106,6 +113,7 @@ public interface TranslationJobRepository extends JpaRepository<TranslationJob, 
                 j.resultContent = :result,
                 j.sourceLang = :sourceLang,
                 j.provider = :provider,
+                j.billedChars = :billedChars,
                 j.completedAt = :now,
                 j.lastError = null
             where j.id = :id
@@ -114,6 +122,7 @@ public interface TranslationJobRepository extends JpaRepository<TranslationJob, 
                  @Param("result") String result,
                  @Param("sourceLang") String sourceLang,
                  @Param("provider") TranslationProperties.Provider provider,
+                 @Param("billedChars") int billedChars,
                  @Param("now") Instant now);
 
     /** Porażka, ale próbujemy dalej - wiersz wraca do PENDING z odsuniętym next_attempt_at. */
@@ -197,16 +206,21 @@ public interface TranslationJobRepository extends JpaRepository<TranslationJob, 
     Optional<TranslationResultView> findResult(@Param("id") Long id, @Param("userId") Long userId);
 
     /**
-     * Ile znaków użytkownik zlecił od podanego momentu - pod dobowy limit.
+     * Ile znaków użytkownik faktycznie WYDAŁ U DOSTAWCY od podanego momentu - pod dobowy limit.
+     *
+     * Sumuje billedChars, nie charCount, i to jest cała różnica: zlecenie zaspokojone z cache'a
+     * ma tu 0. Sumowanie charCount znaczyło, że powtórka nie płaci za siebie, ale podnosi
+     * licznik NASTĘPNYM zleceniom - czyli naprawdę nowy plik odbijał się od limitu na budżecie,
+     * którego nikt nie wydał. Pełne uzasadnienie: changelog 0009-translation-billed-chars.xml.
      *
      * coalesce, bo suma z pustego zbioru to NULL, a nie zero: bez tego pierwsze zlecenie
      * nowego użytkownika wywalałoby się na NullPointerException.
      */
     @Query("""
-            select coalesce(sum(j.charCount), 0) from TranslationJob j
+            select coalesce(sum(j.billedChars), 0) from TranslationJob j
             where j.user.id = :userId and j.createdAt >= :since
             """)
-    long sumCharCountSince(@Param("userId") Long userId, @Param("since") Instant since);
+    long sumBilledCharsSince(@Param("userId") Long userId, @Param("since") Instant since);
 
     /**
      * Czy użytkownik ma już gotowe tłumaczenie tej treści - sam fakt, bez treści wyniku.

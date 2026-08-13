@@ -84,7 +84,7 @@ class TranslationNotificationTest {
     private TranslationJob newJob() {
         return jobRepository.save(new TranslationJob(
                 owner, "raport.txt", TargetLanguage.DE, "Ala ma kota",
-                TokenHasher.sha256Hex("Ala ma kota"), DbClock.now()));
+                TokenHasher.sha256Hex("Ala ma kota"), DbClock.now(), false));
     }
 
     @Test

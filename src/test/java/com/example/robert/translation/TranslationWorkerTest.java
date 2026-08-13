@@ -82,7 +82,7 @@ class TranslationWorkerTest {
     private TranslationJob newJob(String content) {
         return jobRepository.save(new TranslationJob(
                 owner, "plik.txt", TargetLanguage.EN_GB, content,
-                TokenHasher.sha256Hex(content), DbClock.now()));
+                TokenHasher.sha256Hex(content), DbClock.now(), false));
     }
 
     /**

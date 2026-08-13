@@ -74,12 +74,21 @@ public class TranslationService {
          * Sprawdzenie jest tanie: existsCached idzie po indeksie idx_translation_jobs_cache
          * i NIE czyta treści wyniku. Samo kopiowanie wyniku dzieje się później, w workerze.
          */
-        if (!repository.existsCached(owner.getId(), contentHash, targetLang, properties.provider())) {
+        boolean expectedCacheHit =
+                repository.existsCached(owner.getId(), contentHash, targetLang, properties.provider());
+
+        if (!expectedCacheHit) {
             enforceDailyQuota(owner, file.content().length(), now);
         }
 
+        /*
+         * Ta sama odpowiedź decyduje o DWÓCH rzeczach i musi być jedna: czy naliczyć limit
+         * teraz i ile znaków ten wiersz wnosi do limitu NASTĘPNYCH zleceń (billedChars).
+         * Rozdzielenie ich na dwa zapytania byłoby tym samym rozjazdem, przed którym ostrzega
+         * komentarz przy findCachedFor - z tą różnicą, że tu rozjazd trwałby w danych.
+         */
         TranslationJob job = repository.save(new TranslationJob(
-                owner, file.filename(), targetLang, file.content(), contentHash, now));
+                owner, file.filename(), targetLang, file.content(), contentHash, now, expectedCacheHit));
 
         // Zestawiony z translation.jobs.finished daje długość kolejki bez odpytywania bazy:
         // rozjazd między tymi dwoma licznikami to zlecenia, które utknęły.
@@ -97,7 +106,7 @@ public class TranslationService {
 
     private void enforceDailyQuota(User owner, int requestedChars, Instant now) {
         int limit = properties.dailyCharLimit();
-        long used = repository.sumCharCountSince(owner.getId(), now.minus(QUOTA_WINDOW));
+        long used = repository.sumBilledCharsSince(owner.getId(), now.minus(QUOTA_WINDOW));
         long remaining = Math.max(0, limit - used);
 
         if (requestedChars > remaining) {

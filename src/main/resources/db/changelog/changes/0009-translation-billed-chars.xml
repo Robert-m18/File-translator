@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="0009-01-translation-billed-chars" author="robert">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <columnExists tableName="translation_jobs" columnName="billed_chars"/>
+            </not>
+        </preConditions>
+
+        <!--
+            Znaki FAKTYCZNIE WYDANE u dostawcy, w odróżnieniu od char_count, który mówi
+            wyłącznie, jak długi był plik.
+
+            PO CO OSOBNA KOLUMNA: dobowy limit liczył zużycie sumą char_count po wszystkich
+            zleceniach z okna, a więc także po tych zaspokojonych z cache'a - które u dostawcy
+            nie kosztują ani znaku. Skutek był taki, że powtórka nie płaciła za siebie, ale
+            podnosiła licznik NASTĘPNYM zleceniom: przy limicie 50 000 plik na 30 000 znaków
+            wgrany dwa razy pokazywał zużycie 60 000, więc kolejny, NAPRAWDĘ nowy plik odbijał
+            się od limitu, mimo że z budżetu wydano połowę. Błąd szedł w stronę nadmiernie
+            restrykcyjną (konta u dostawcy nie dało się przekroczyć), ale unieważniał połowę
+            sensu deduplikacji: powtórki miały być darmowe, a zjadały dzienny przydział.
+
+            DLACZEGO NIE DA SIĘ TEGO ZROBIĆ SAMYM ZAPYTANIEM: wiersz zaspokojony z cache'a jest
+            po fakcie NIEODRÓŻNIALNY od zwykłego - markDone ustawia mu provider tak samo, bo
+            provider jest częścią klucza deduplikacji i musi tam być, żeby ten wiersz mógł
+            z kolei zaspokoić następne zlecenie. Ślad musi więc powstać w chwili decyzji.
+
+            char_count ZOSTAJE bez zmian i dalej jedzie w API - to jest długość pliku, którą
+            widzi użytkownik, i nie ma powodu, żeby zmieniała znaczenie razem z rozliczeniem.
+        -->
+        <addColumn tableName="translation_jobs">
+            <column name="billed_chars" type="INT"/>
+        </addColumn>
+
+        <!--
+            Wiersze sprzed tej zmiany dostają billed_chars = char_count, czyli dokładnie to,
+            co limit liczył im do tej pory. Wybór jest świadomy i idzie w stronę zachowawczą:
+            nie da się już po fakcie ustalić, które z nich były trafieniami (patrz wyżej), więc
+            alternatywa - wpisanie zer - jednorazowo WYKASOWAŁABY komuś zużycie z bieżącej doby
+            i pozwoliła przekroczyć budżet u dostawcy. Przeszacowanie historii mija po 24 h,
+            bo limit liczy się w oknie ruchomym.
+        -->
+        <update tableName="translation_jobs">
+            <column name="billed_chars" valueComputed="char_count"/>
+        </update>
+
+        <!--
+            NOT NULL dopiero po uzupełnieniu. Wartość jest znana przy każdym wstawieniu (ustawia
+            ją konstruktor encji), więc kolumna nie potrzebuje wartości domyślnej w bazie -
+            i lepiej, żeby jej nie miała: domyślna 0 zamieniłaby pominięcie tego pola w nowym
+            kodzie w ciche darmowe tłumaczenia zamiast w błąd przy zapisie.
+        -->
+        <addNotNullConstraint tableName="translation_jobs"
+                              columnName="billed_chars"
+                              columnDataType="INT"/>
+    </changeSet>
+
+</databaseChangeLog>

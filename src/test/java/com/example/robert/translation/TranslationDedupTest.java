@@ -236,6 +236,69 @@ class TranslationDedupTest {
     }
 
     /**
+     * DRUGA POŁOWA tego samego wymagania, i to ta, której brakowało: trafienie nie może
+     * podnosić licznika także NASTĘPNYM zleceniom.
+     *
+     * Test wyżej sprawdzał wyłącznie, że samo zlecenie z cache'a nie odbija się od limitu -
+     * i przechodził, mimo że limit liczył zużycie sumą charCount po wszystkich wierszach,
+     * czyli doliczał też trafienia. Powtórka nie płaciła więc za siebie, ale zjadała budżet
+     * naprawdę nowym plikom. Znalezione 2026-08-13 ręcznym przejściem na docker compose:
+     * trzy wgrania tego samego pliku po 5 znaków dały zużycie 15 przy najwyżej 5 wydanych
+     * u dostawcy.
+     *
+     * Liczby dobrane tak, żeby test padał przed naprawą: limit 100, plik 60 znaków wgrany
+     * dwa razy (drugi raz z cache'a), potem NOWY plik na 30 znaków. Po naprawie zużycie to
+     * 60, więc nowy plik się mieści; przy sumowaniu charCount byłoby 120 i wróciłoby 429.
+     */
+    @Test
+    @DisplayName("Trafienie w cache nie zjada limitu następnym zleceniom")
+    void cacheHit_shouldNotInflateQuotaForLaterFiles() throws Exception {
+        String repeated = "b".repeat(60);
+
+        submitAndProcess(accessToken, repeated, "EN_GB");
+        long cachedJob = submitAndProcess(accessToken, repeated, "EN_GB");
+
+        assertThat(jobRepository.findById(cachedJob).orElseThrow().getBilledChars())
+                .as("zlecenie zaspokojone z cache'a nie wydało u dostawcy ani znaku")
+                .isZero();
+
+        assertThat(submit(accessToken, "e".repeat(30), "EN_GB").getResponse().getStatus())
+                .as("nowy plik ma się zmieścić w limicie, bo trafienie nic z niego nie zabrało")
+                .isEqualTo(202);
+    }
+
+    /**
+     * Wartość zapisana przy przyjęciu zlecenia jest tylko PRZEWIDYWANIEM, a worker musi ją
+     * skorygować. Tu gotowy wiersz znika między jednym a drugim (użytkownik go kasuje; tak
+     * samo zadziałałaby retencja), więc zlecenie przyjęte jako darmowe jednak idzie do
+     * dostawcy - i musi zostać naliczone.
+     *
+     * Bez korekty w markDone te znaki nie policzyłyby się nigdzie i dobowy limit dałoby się
+     * obchodzić: wystarczyłoby zlecić plik, który już się ma, i skasować oryginał.
+     */
+    @Test
+    @DisplayName("Trafienie, które przepadło przed obróbką, jest jednak naliczane")
+    void vanishedCacheHit_shouldBeBilledAfterAll() throws Exception {
+        String content = "f".repeat(60);
+
+        long first = submitAndProcess(accessToken, content, "EN_GB");
+
+        // Przyjęte jako trafienie - w tej chwili gotowy wynik jeszcze istnieje.
+        MvcResult accepted = submit(accessToken, content, "EN_GB");
+        assertThat(accepted.getResponse().getStatus()).isEqualTo(202);
+        long second = ((Number) JsonPath.read(
+                accepted.getResponse().getContentAsString(), "$.id")).longValue();
+
+        jobRepository.deleteById(first);
+        worker.processBatch();
+
+        verify(provider, times(2)).translate(anyString(), any());
+        assertThat(jobRepository.findById(second).orElseThrow().getBilledChars())
+                .as("dostawca był wołany, więc znaki są wydane mimo przewidywania trafienia")
+                .isEqualTo(60);
+    }
+
+    /**
      * Kontrola negatywna do testu wyżej: treść, której w cache'u NIE MA, dalej odbija się
      * od limitu. Bez tego "limit nie działa wcale" przechodziłoby tak samo jak "limit pomija
      * trafienia".

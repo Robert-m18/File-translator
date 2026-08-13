@@ -192,8 +192,11 @@ public class TranslationJobWorker {
             Optional<TranslationCacheHit> cached = findCached(job);
 
             if (cached.isPresent()) {
+                // 0 znaków do rozliczenia: dostawca nie był wołany, więc dobowy limit nie ma
+                // za co obciążyć tego zlecenia ANI TERAZ, ani przy kolejnych (suma po
+                // billedChars). Przy przyjęciu zapisano to samo, ale dopiero tutaj jest to fakt.
                 markDone(job, new TranslationResult(
-                        cached.get().resultContent(), cached.get().sourceLang()));
+                        cached.get().resultContent(), cached.get().sourceLang()), 0);
 
                 countOutcome("done");
                 countCache("hit");
@@ -210,7 +213,9 @@ public class TranslationJobWorker {
 
             TranslationResult result = timeProviderCall(() ->
                     provider.translate(job.getSourceContent(), job.getTargetLang()));
-            markDone(job, result);
+            // Dostawca był wołany, więc znaki są wydane - także wtedy, gdy przy przyjęciu
+            // zlecenie wyglądało na trafienie, a gotowy wiersz zniknął przed jego obróbką.
+            markDone(job, result, job.getCharCount());
 
             countOutcome("done");
             // Znaki, a nie zlecenia: u dostawcy płaci się za znaki, więc to jest jedyna
@@ -259,13 +264,13 @@ public class TranslationJobWorker {
         return hits == null || hits.isEmpty() ? Optional.empty() : Optional.of(hits.get(0));
     }
 
-    private void markDone(TranslationJob job, TranslationResult result) {
+    private void markDone(TranslationJob job, TranslationResult result, int billedChars) {
         shortTransaction.execute(status -> {
             // Dostawca zapisywany razem z wynikiem, bo dopiero teraz wiadomo, kto go wykonał.
             // Wchodzi do klucza deduplikacji: bez niego wynik atrapy zaspokoiłby zlecenie
             // kierowane do prawdziwego dostawcy.
             repository.markDone(job.getId(), result.translatedText(),
-                    result.detectedSourceLanguage(), properties.provider(), DbClock.now());
+                    result.detectedSourceLanguage(), properties.provider(), billedChars, DbClock.now());
             // Dane do powiadomienia biorą się z osobnego zapytania, a nie z job.getUser():
             // encja pochodzi z zamkniętej już transakcji rezerwacji, więc leniwe pole user
             // jest tam martwym proxy. Szczegóły przy findCompletedEvent.

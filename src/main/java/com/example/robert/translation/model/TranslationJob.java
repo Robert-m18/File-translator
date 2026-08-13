@@ -99,9 +99,23 @@ public class TranslationJob {
     @Column(name = "provider", length = 20)
     private TranslationProperties.Provider provider;
 
-    /** Liczba znaków źródła - pod dobowy limit użytkownika, bez czytania całej treści. */
+    /** Liczba znaków źródła - długość pliku pokazywana użytkownikowi, bez czytania treści. */
     @Column(name = "char_count", nullable = false)
     private int charCount;
+
+    /**
+     * Znaki FAKTYCZNIE WYDANE u dostawcy - to na niej, a nie na charCount, liczy się dobowy limit.
+     *
+     * Zlecenie zaspokojone z cache'a ma tu 0, bo u dostawcy nie kosztowało ani znaku. Rozdzielenie
+     * jest konieczne, bo po fakcie wiersz z cache'a jest nieodróżnialny od zwykłego: provider
+     * dostaje wypełniony tak samo (musi, bo wchodzi do klucza deduplikacji). Uzasadnienie
+     * i historia defektu: changelog 0009-translation-billed-chars.xml.
+     *
+     * Wartość ustawiana przy przyjęciu zlecenia jest PRZEWIDYWANIEM (patrz TranslationService),
+     * a worker koryguje ją przy zapisie wyniku - dopiero tam wiadomo, czy dostawca był wołany.
+     */
+    @Column(name = "billed_chars", nullable = false)
+    private int billedChars;
 
     /** Liczy podejścia (rezerwacje), nie potwierdzone porażki - jak w skrzynce nadawczej. */
     @Column(nullable = false)
@@ -125,18 +139,27 @@ public class TranslationJob {
     @Column(name = "completed_at")
     private Instant completedAt;
 
+    /**
+     * @param expectedCacheHit czy w chwili przyjęcia istniał już gotowy wynik tej treści -
+     *                         decyduje o billedChars. To PRZEWIDYWANIE, nie fakt: gotowy wiersz
+     *                         może zniknąć (skasowany przez użytkownika, wygaszony przez
+     *                         retencję) zanim worker weźmie zlecenie, dlatego worker zapisuje
+     *                         przy wyniku wartość ostateczną.
+     */
     public TranslationJob(User user,
                           String originalFilename,
                           TargetLanguage targetLang,
                           String sourceContent,
                           String contentHash,
-                          Instant now) {
+                          Instant now,
+                          boolean expectedCacheHit) {
         this.user = user;
         this.originalFilename = originalFilename;
         this.targetLang = targetLang;
         this.sourceContent = sourceContent;
         this.contentHash = contentHash;
         this.charCount = sourceContent.length();
+        this.billedChars = expectedCacheHit ? 0 : this.charCount;
         this.status = TranslationStatus.PENDING;
         this.attempts = 0;
         // Gotowe do wzięcia natychmiast - worker zabierze je przy najbliższym cyklu
