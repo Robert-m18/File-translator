@@ -11,6 +11,7 @@ import com.example.robert.translation.provider.TranslationProvider;
 import com.example.robert.translation.provider.TranslationProviderException;
 import com.example.robert.translation.provider.TranslationResult;
 import com.example.robert.translation.repository.TranslationJobRepository;
+import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import jakarta.annotation.PreDestroy;
@@ -88,6 +89,7 @@ public class TranslationJobWorker {
         this.events = events;
         this.properties = properties;
         this.meters = meters;
+        registerMeters();
 
         this.shortTransaction = new TransactionTemplate(transactionManager);
         this.shortTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
@@ -344,6 +346,40 @@ public class TranslationJobWorker {
      * Licznik zakończeń z tagiem wyniku. Tag, a nie trzy osobne liczniki: dzięki temu
      * "ile zleceń w ogóle" i "jaki odsetek padł" to jedno zapytanie w Prometheusie.
      */
+    /**
+     * Zakłada liczniki, ZANIM cokolwiek je podbije.
+     *
+     * Micrometer tworzy licznik dopiero przy pierwszym increment(), więc do pierwszego
+     * zdarzenia danego rodzaju /actuator/metrics/&lt;nazwa&gt; odpowiada 404 - a to jest odpowiedź
+     * nie do odróżnienia od literówki w nazwie, metryki usuniętej przy refaktoryzacji i po
+     * prostu zepsutej aplikacji. Znaczy "zero", a czyta się jak awaria.
+     *
+     * Najbardziej boli to przy translation.chars.translated, bo to jedyna metryka odpowiadająca
+     * na pytanie "ile znaków wydaliśmy u dostawcy", czyli jak blisko limitu konta jesteśmy.
+     * Trafione 2026-08-13 przy ręcznej weryfikacji deduplikacji: po restarcie kontenera, przez
+     * który przeszły same trafienia w cache, ten endpoint zwracał 404 - poprawnie, i mimo to
+     * bezużytecznie. To ta sama pomyłka co 404 na /actuator/metrics przy wąskim exposure
+     * na prodzie, opisana w CLAUDE.md.
+     *
+     * translation.cache jest tu w OBU wariantach, bo sam licznik trafień bez pudeł nie daje
+     * współczynnika - a pytanie brzmi "czy deduplikacja się opłaca", nie "czy w ogóle działa".
+     *
+     * Świadomie NIE rejestrujemy translation.jobs.submitted: jest tagowany językiem docelowym,
+     * więc wstępne założenie wszystkich kombinacji to sam szum. translation.jobs.finished ma tę
+     * samą własność co powyższe (outcome=failed czyta się jak awaria zamiast jak zero)
+     * i jest kandydatem, gdyby kiedyś stanął na nim alarm.
+     */
+    private void registerMeters() {
+        Counter.builder("translation.chars.translated")
+                .description("Znaki faktycznie wysłane do dostawcy - podstawa rachunku")
+                .register(meters);
+        Counter.builder("translation.chars.saved")
+                .description("Znaki, których nie wysłano dzięki deduplikacji")
+                .register(meters);
+        Counter.builder("translation.cache").tag("result", "hit").register(meters);
+        Counter.builder("translation.cache").tag("result", "miss").register(meters);
+    }
+
     private void countOutcome(String outcome) {
         meters.counter("translation.jobs.finished", "outcome", outcome).increment();
     }
