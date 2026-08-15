@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="0010-01-admin-account-block" author="robert">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <columnExists tableName="users" columnName="blocked_at"/>
+            </not>
+        </preConditions>
+
+        <!--
+            Blokada konta nałożona przez ADMINISTRATORA - kara, nie automatyczne
+            zabezpieczenie. Wchodzi natychmiast: zrywa żywe sesje i zamyka logowanie.
+
+            DLACZEGO WŁASNA KOLUMNA, A NIE locked_until
+
+            locked_until niesie blokadę po serii nieudanych logowań i jest zerowane przez
+            resetFailedLoginAttempts przy KAŻDYM udanym logowaniu oraz przy KAŻDYM resecie
+            hasła. Kara administracyjna zapisana w tym samym polu znikałaby więc w reakcji
+            na działanie ukaranego - wystarczyłby jeden reset hasła z własnej skrzynki.
+            Dwa różne stany o różnym cyklu życia nie mieszczą się w jednej kolumnie.
+
+            DLACZEGO NIE enabled
+
+            enabled = false jest w tej aplikacji stanem NIEMOŻLIWYM (konto powstaje dopiero
+            przy potwierdzeniu adresu - patrz AuthService.confirmEmail), a Spring Security
+            mapuje je na DisabledException, czyli na odpowiedź ACCOUNT_NOT_CONFIRMED.
+            Zablokowany użytkownik dostałby komunikat "sprawdź maila" i czekał na wiadomość,
+            która nigdy nie przyjdzie.
+
+            NULL = konto niezablokowane. Bez wartości domyślnej i bez NOT NULL: brak blokady
+            to brak wiersza w czasie, a nie jakaś data.
+        -->
+        <addColumn tableName="users">
+            <column name="blocked_at" type="${type.timestamptz}"/>
+        </addColumn>
+
+        <!--
+            Powód blokady - ŚLAD AUDYTOWY dla drugiego administratora, nie ozdoba.
+            Blokada bez powodu jest nie do zweryfikowania: kolejna osoba widzi zamknięte
+            konto i nie ma jak ustalić, czy odblokowanie jest bezpieczne. Dlatego pole jest
+            wymagane po stronie API (BlockUserRequest), a w bazie nullable - bo jest puste
+            dokładnie wtedy, gdy blocked_at też jest puste.
+
+            255 znaków: powód ma być zdaniem, a nie raportem. Dłuższe uzasadnienia należą
+            do systemu zgłoszeń, nie do kolumny w users.
+
+            NIE trafia do logów, tak samo jak adres email - patrz AdminUserService.
+        -->
+        <addColumn tableName="users">
+            <column name="blocked_reason" type="VARCHAR(255)"/>
+        </addColumn>
+
+        <!--
+            Bez indeksu i bez migracji danych. Blokada jest odczytywana wyłącznie razem
+            z wierszem użytkownika pobranym po kluczu głównym albo po unikacie na email
+            (JwtFilter, logowanie, panel), więc osobny indeks nie miałby czego przyspieszyć.
+            Jedyne zapytanie filtrujące po tej kolumnie - zliczenie niezablokowanych
+            administratorów - trafia na garstkę wierszy z rolą ADMIN.
+        -->
+    </changeSet>
+
+</databaseChangeLog>

@@ -9,6 +9,7 @@ import com.example.robert.auth.model.PasswordResetToken;
 import com.example.robert.auth.model.PendingRegistration;
 import com.example.robert.auth.repository.PasswordResetTokenRepository;
 import com.example.robert.auth.repository.PendingRegistrationRepository;
+import com.example.robert.common.exception.AccountBlockedException;
 import com.example.robert.common.exception.InvalidTokenException;
 import com.example.robert.common.exception.JwtAuthenticationException;
 import com.example.robert.common.exception.TokenExpiredException;
@@ -278,6 +279,29 @@ public class AuthService {
         }
 
         String username = jwtUtil.extractUsername(refreshToken);
+
+        /*
+         * 1a. Stan KONTA, sprawdzany przed rotacją.
+         *
+         * Bez tego blokada administracyjna byłaby nieskuteczna przez pełne 7 dni ważności
+         * tokenu odświeżającego: zablokowany nie mógłby się zalogować i nie otworzyłby
+         * żadnego endpointu żywym tokenem dostępowym (JwtFilter), ale co 15 minut wymieniałby
+         * sobie token na nowy i pracował dalej. AdminUserService.block kasuje wprawdzie
+         * tokeny z bazy, ale to druga, niezależna warstwa - ta sprawdza stan konta, tamta
+         * usuwa sesje, i żadna nie zastępuje drugiej.
+         *
+         * KOLEJNOŚĆ WOBEC rotate() JEST ISTOTNA. Po rotacji przedstawiony token jest już
+         * zużyty, więc ponowna próba dawałaby REFRESH_TOKEN_REUSED - komunikat mówiący
+         * "wykryto kradzież tokenu" zamiast "konto zablokowane", a log zapełniałby się
+         * fałszywymi ostrzeżeniami o włamaniu przy każdym odświeżeniu z zablokowanego konta.
+         */
+        userService.findEntityByEmail(username)
+                .filter(User::isBlocked)
+                .ifPresent(blocked -> {
+                    log.warn("Odrzucono odświeżenie sesji zablokowanego konta (id={})", blocked.getId());
+                    throw new AccountBlockedException();
+                });
+
         String accessToken = jwtUtil.generateToken(username);
         String newRefreshToken = jwtUtil.generateRefreshToken(username);
 

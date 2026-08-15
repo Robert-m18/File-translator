@@ -4,23 +4,32 @@
  */
 package com.example.robert.user;
 
+import com.example.robert.common.validation.EmailNormalizer;
+import com.example.robert.user.dto.AdminUserView;
 import com.example.robert.user.model.Role;
 import com.example.robert.user.model.User;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 
 /**
  * Operacje na kontach użytkowników.
  *
- * Nie ma tu CRUD-u administracyjnego (lista, odczyt po id, edycja, usuwanie). Był, ale bez
- * kontrolera nikt go nie wołał, a martwy kod obok kodu bezpieczeństwa jest gorszy niż jego
- * brak: nie wiadomo, czy przeszedł ten sam przegląd co reszta. Panel administracyjny wróci
- * jako świadomie zaprojektowana funkcja razem z kontrolerem i testami, a nie jako
- * zaparkowane metody czekające na wywołanie.
+ * Nie ma tu CRUD-u administracyjnego w dawnym rozumieniu (edycja dowolnego pola, usuwanie).
+ * Był, ale bez kontrolera nikt go nie wołał, a martwy kod obok kodu bezpieczeństwa jest
+ * gorszy niż jego brak: nie wiadomo, czy przeszedł ten sam przegląd co reszta.
+ *
+ * Metody dla panelu administracyjnego (sekcja niżej) są tego przeciwieństwem: każda ma
+ * wołającego w pakiecie admin/, własny endpoint i własny test regresyjny. Pakiet admin/
+ * NIE sięga do UserRepository - tabela users należy do tego pakietu i całe wejście do niej
+ * prowadzi tędy.
  */
 @Service
 @RequiredArgsConstructor
@@ -98,5 +107,85 @@ public class UserService {
     @Transactional
     public void clearLoginFailures(String email) {
         userRepository.resetFailedLoginAttempts(email);
+    }
+
+    /* ---------------------------------------------------------------------------------
+     * Panel administracyjny. Wołane wyłącznie z AdminUserService.
+     * --------------------------------------------------------------------------------- */
+
+    /** Znak ucieczki wzorca LIKE. Uzasadnienie wyboru: UserRepository.findAdminViews. */
+    private static final char LIKE_ESCAPE = '!';
+
+    @Transactional(readOnly = true)
+    public Page<AdminUserView> findAdminViews(String query, Pageable pageable) {
+        return userRepository.findAdminViews(likePattern(query), pageable);
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<AdminUserView> findAdminView(Long id) {
+        return userRepository.findAdminView(id);
+    }
+
+    /**
+     * @return true, jeśli blokada faktycznie została nałożona; false, jeśli konto było
+     *         już zablokowane (operacja idempotentna - patrz UserRepository.blockAccount)
+     */
+    @Transactional
+    public boolean blockAccount(Long id, Instant now, String reason) {
+        return userRepository.blockAccount(id, now, reason) > 0;
+    }
+
+    @Transactional
+    public void unblockAccount(Long id) {
+        userRepository.unblockAccount(id);
+    }
+
+    /** Zdejmuje blokadę po nieudanych logowaniach. NIE rusza blokady administracyjnej. */
+    @Transactional
+    public void clearLoginLock(Long id) {
+        userRepository.clearLoginLock(id);
+    }
+
+    /**
+     * Identyfikatory niezablokowanych administratorów, z blokadą wierszy na czas transakcji.
+     * Musi być wołane w transakcji wołającego - inaczej blokada spada, zanim zapadnie
+     * decyzja, której miała pilnować.
+     */
+    @Transactional
+    public List<Long> lockUnblockedAdminIds() {
+        return userRepository.lockUnblockedAdminIds();
+    }
+
+    /**
+     * Zamienia fragment adresu wpisany przez administratora we wzorzec LIKE.
+     *
+     * Dwie rzeczy, obie konieczne:
+     *
+     * 1. NORMALIZACJA (EmailNormalizer) - żeby "Kowalski" i " kowalski " szukały tego samego.
+     *    Po stronie kolumny odpowiada jej lower(u.email) w zapytaniu.
+     * 2. ESCAPOWANIE metaznaków - bez niego wpisanie "%" zwraca całą bazę, a "_" pasuje do
+     *    dowolnego znaku. Filtr przestawałby wtedy filtrować po CICHU, czyli w sposób,
+     *    którego administrator nie ma jak zauważyć. Regresja:
+     *    AdminPanelTest.search_shouldTreatWildcardsLiterally.
+     *
+     * Puste zapytanie daje wzorzec "%", więc lista bez filtra i lista z filtrem to jedno
+     * zapytanie - nie ma tu dynamicznie sklejanego SQL-a ani dwóch ścieżek do rozjechania.
+     */
+    private static String likePattern(String query) {
+        String normalized = EmailNormalizer.normalize(query);
+        if (normalized == null || normalized.isEmpty()) {
+            return "%";
+        }
+
+        StringBuilder pattern = new StringBuilder(normalized.length() + 8).append('%');
+        for (char c : normalized.toCharArray()) {
+            // Sam znak ucieczki też trzeba uciec - inaczej adres z wykrzyknikiem
+            // szukałby czegoś innego, niż wpisano.
+            if (c == '%' || c == '_' || c == LIKE_ESCAPE) {
+                pattern.append(LIKE_ESCAPE);
+            }
+            pattern.append(c);
+        }
+        return pattern.append('%').toString();
     }
 }
