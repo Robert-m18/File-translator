@@ -41,5 +41,8 @@
     <include file="db/changelog/changes/0008-translation-content-hash.xml"/>
     <include file="db/changelog/changes/0009-translation-billed-chars.xml"/>
     <include file="db/changelog/changes/0010-admin-account-block.xml"/>
+    <include file="db/changelog/changes/0011-translation-object-storage.xml"/>
+    <include file="db/changelog/changes/0012-drop-translation-content.xml"/>
+    <include file="db/changelog/changes/0013-translation-document-jobs.xml"/>
 
 </databaseChangeLog>

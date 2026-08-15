@@ -6,13 +6,16 @@ package com.example.robert.translation;
 
 import com.example.robert.common.time.DbClock;
 import com.example.robert.translation.repository.TranslationJobRepository;
-import lombok.RequiredArgsConstructor;
+import com.example.robert.translation.storage.ObjectKeys;
+import com.example.robert.translation.storage.ObjectStore;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
+import java.util.List;
 
 /**
  * Nocne usuwanie starych zleceń tłumaczenia.
@@ -45,11 +48,28 @@ import java.time.Instant;
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class TranslationCleanupJob {
 
     private final TranslationJobRepository repository;
     private final TranslationProperties properties;
+    private final ObjectStore objectStore;
+
+    /**
+     * Transakcja wołana programowo: kasowanie plików MUSI zostać poza nią (patrz kolejność
+     * przy removeOlderThanRetention), a @Transactional na metodzie prywatnej tej samej klasy
+     * nie zadziałałoby wcale - wywołanie własnej metody omija proxy Springa.
+     */
+    private final TransactionTemplate transaction;
+
+    public TranslationCleanupJob(TranslationJobRepository repository,
+                                 TranslationProperties properties,
+                                 ObjectStore objectStore,
+                                 PlatformTransactionManager transactionManager) {
+        this.repository = repository;
+        this.properties = properties;
+        this.objectStore = objectStore;
+        this.transaction = new TransactionTemplate(transactionManager);
+    }
 
     /**
      * 3:20 - po sprzątaniu tokenów (3:00) i po sprzątaniu skrzynki nadawczej (3:10).
@@ -65,11 +85,37 @@ public class TranslationCleanupJob {
      * Wydzielone z metody harmonogramu, żeby test mógł wywołać samo kasowanie, bez czekania
      * na cron i bez zależności od tego, czy harmonogram jest w danym profilu włączony.
      *
+     * KOLEJNOŚĆ: klucze, wiersze, dopiero potem pliki. Ten sam niezmiennik co przy kasowaniu
+     * pojedynczego zlecenia - stanem pośrednim, który może zostać po awarii, jest zawsze
+     * PLIK BEZ WIERSZA, nigdy wiersz bez pliku. Klucze trzeba odczytać przed skasowaniem
+     * wierszy, bo potem nie ma już skąd wziąć prefiksów.
+     *
+     * Reguła wygasania na kubełku robi to samo niezależnie od tego zadania i jest tu siatką
+     * bezpieczeństwa (łapie też pliki osierocone przy przyjmowaniu zleceń). NIE zastępuje
+     * jednak tego kroku: jej TTL to druga wartość w drugim miejscu, a jedyne, co wiąże ją
+     * z app.translation.retention, to uważność. Kasowanie po stronie aplikacji sprawia,
+     * że przy skróceniu retencji pliki znikają razem z wierszami, a nie dopiero wtedy,
+     * gdy ktoś poprawi też regułę na kubełku.
+     *
      * @return ile zleceń usunięto
      */
-    @Transactional
     public int removeOlderThanRetention() {
         Instant cutoff = DbClock.now().minus(properties.retention());
-        return repository.deleteCreatedBefore(cutoff);
+
+        List<String> sourceKeys = repository.findSourceKeysCreatedBefore(cutoff);
+        Integer removed = transaction.execute(status -> repository.deleteCreatedBefore(cutoff));
+
+        for (String key : sourceKeys) {
+            try {
+                objectStore.deletePrefix(ObjectKeys.prefixOf(key));
+            } catch (RuntimeException e) {
+                // Jedno niedokasowane zlecenie nie może zatrzymać sprzątania pozostałych.
+                // Plik zostaje osierocony i wygaśnie przez regułę na kubełku - dlatego
+                // ta reguła jest tu potrzebna nawet przy działającym kasowaniu.
+                log.warn("Nie udało się usunąć plików zlecenia z magazynu: {}", e.toString());
+            }
+        }
+
+        return removed == null ? 0 : removed;
     }
 }

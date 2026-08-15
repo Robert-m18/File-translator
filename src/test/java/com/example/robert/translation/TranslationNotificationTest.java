@@ -13,6 +13,7 @@ import com.example.robert.translation.provider.TranslationProvider;
 import com.example.robert.translation.provider.TranslationProviderException;
 import com.example.robert.translation.provider.TranslationResult;
 import com.example.robert.translation.repository.TranslationJobRepository;
+import com.example.robert.translation.storage.ObjectStore;
 import com.example.robert.user.UserRepository;
 import com.example.robert.user.model.User;
 import org.junit.jupiter.api.BeforeEach;
@@ -64,6 +65,9 @@ class TranslationNotificationTest {
     private TranslationJobRepository jobRepository;
 
     @Autowired
+    private ObjectStore objectStore;
+
+    @Autowired
     private OutboxMessageRepository outboxRepository;
 
     @Autowired
@@ -82,9 +86,8 @@ class TranslationNotificationTest {
     }
 
     private TranslationJob newJob() {
-        return jobRepository.save(new TranslationJob(
-                owner, "raport.txt", TargetLanguage.DE, "Ala ma kota",
-                TokenHasher.sha256Hex("Ala ma kota"), DbClock.now(), false));
+        return jobRepository.save(TranslationTestSupport.storedJob(
+                objectStore, owner, "raport.txt", TargetLanguage.DE, "Ala ma kota"));
     }
 
     @Test

@@ -1,6 +1,8 @@
 package com.example.robert.translation;
 
+import com.example.robert.translation.model.TranslationJob;
 import com.example.robert.translation.repository.TranslationJobRepository;
+import com.example.robert.translation.storage.ObjectStore;
 import com.example.robert.user.UserRepository;
 import jakarta.servlet.http.Cookie;
 import org.junit.jupiter.api.BeforeEach;
@@ -20,6 +22,7 @@ import java.nio.charset.StandardCharsets;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
@@ -52,6 +55,9 @@ class TranslationFlowTest {
 
     @Autowired
     private TranslationJobWorker worker;
+
+    @Autowired
+    private ObjectStore objectStore;
 
     @Autowired
     private PasswordEncoder passwordEncoder;
@@ -133,6 +139,75 @@ class TranslationFlowTest {
     @DisplayName("Pusty cykl workera nie robi nic")
     void emptyQueue_shouldDoNothing() {
         assertThat(worker.processBatch()).isZero();
+    }
+
+    /**
+     * Plik trafia do MAGAZYNU OBIEKTOWEGO, a w wierszu zostaje sam klucz.
+     *
+     * Asercja na treści w magazynie, a nie na tym, że kolumna czegoś nie zawiera: gdyby ktoś
+     * przywrócił trzymanie treści w bazie, ten test przeszedłby na samym istnieniu klucza.
+     * Sprawdzamy więc, że pod kluczem z wiersza FAKTYCZNIE leży wgrany plik - to jedyna
+     * asercja, której nie da się spełnić bez działającego zapisu do magazynu.
+     */
+    @Test
+    @DisplayName("Źródło i wynik leżą w magazynie pod kluczami z wiersza zlecenia")
+    void job_shouldStoreFilesUnderKeysFromRow() throws Exception {
+        Long id = submit();
+
+        TranslationJob afterSubmit = jobRepository.findById(id).orElseThrow();
+        assertThat(afterSubmit.getSourceObjectKey())
+                .as("klucz źródła ma nieść identyfikator właściciela i UUID zlecenia")
+                .matches("users/\\d+/jobs/[0-9a-f-]{36}/source\\.txt");
+        assertThat(new String(objectStore.read(afterSubmit.getSourceObjectKey()), StandardCharsets.UTF_8))
+                .isEqualTo(CONTENT);
+        assertThat(afterSubmit.getResultObjectKey())
+                .as("wynik nie istnieje, dopóki worker nie przetłumaczy")
+                .isNull();
+
+        worker.processBatch();
+
+        TranslationJob afterWorker = jobRepository.findById(id).orElseThrow();
+        // Wynik leży pod TYM SAMYM prefiksem co źródło - to jest właśnie wyłączność
+        // zlecenia na swój prefiks, dzięki której kasowanie jest jednym wywołaniem.
+        assertThat(afterWorker.getResultObjectKey())
+                .isEqualTo(afterSubmit.getSourceObjectKey().replace("source.txt", "result.txt"));
+        assertThat(new String(objectStore.read(afterWorker.getResultObjectKey()), StandardCharsets.UTF_8))
+                .isEqualTo("[[EN-GB]] Ala ma kota\n[[EN-GB]] Kot ma Alę");
+    }
+
+    /**
+     * Skasowanie zlecenia ma zabrać PLIKI, a nie tylko wiersz.
+     *
+     * Bez tego kroku "usuń moje tłumaczenie" zostawiałoby treść pliku w magazynie na kolejne
+     * dni - a to jest jedyny sposób, w jaki użytkownik może usunąć swój plik z serwera przed
+     * upływem retencji. Reguła wygasania na kubełku by go w końcu sprzątnęła, ale "w końcu"
+     * nie jest odpowiedzią na żądanie usunięcia danych.
+     */
+    @Test
+    @DisplayName("Skasowanie zlecenia usuwa jego pliki z magazynu")
+    void delete_shouldRemoveFilesFromStorage() throws Exception {
+        Long id = submit();
+        worker.processBatch();
+
+        TranslationJob job = jobRepository.findById(id).orElseThrow();
+        String sourceKey = job.getSourceObjectKey();
+        String resultKey = job.getResultObjectKey();
+        assertThat(objectStore.exists(sourceKey)).isTrue();
+        assertThat(objectStore.exists(resultKey)).isTrue();
+
+        mockMvc.perform(delete("/translations/{id}", id).cookie(accessToken).with(csrf()))
+                .andExpect(status().isNoContent());
+
+        assertThat(jobRepository.findById(id)).isEmpty();
+        // OBA pliki, nie tylko wynik: źródło to też treść wgrana przez użytkownika.
+        // Asercje idą przez interfejs, bez rzutowania na implementację w pamięci - w jobie
+        // "integration" ten sam test chodzi na prawdziwym MinIO.
+        assertThat(objectStore.exists(sourceKey))
+                .as("źródło ma zniknąć razem ze zleceniem")
+                .isFalse();
+        assertThat(objectStore.exists(resultKey))
+                .as("wynik ma zniknąć razem ze zleceniem")
+                .isFalse();
     }
 
     /**

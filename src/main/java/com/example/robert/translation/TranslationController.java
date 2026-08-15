@@ -4,11 +4,13 @@
  */
 package com.example.robert.translation;
 
+import com.example.robert.translation.dto.TranslationContent;
 import com.example.robert.translation.dto.TranslationJobResponse;
-import com.example.robert.translation.dto.TranslationResultView;
 import com.example.robert.translation.model.TargetLanguage;
 import com.example.robert.user.model.User;
 import lombok.RequiredArgsConstructor;
+import org.springframework.core.io.InputStreamResource;
+import org.springframework.core.io.Resource;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -68,7 +70,7 @@ public class TranslationController {
             @RequestParam("targetLang") TargetLanguage targetLang,
             @AuthenticationPrincipal User user) {
 
-        UploadedTextFile uploaded = UploadedTextFile.from(file);
+        UploadedFile uploaded = UploadedFile.from(file);
         TranslationJobResponse response = translationService.submit(user, uploaded, targetLang);
 
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(response);
@@ -91,13 +93,24 @@ public class TranslationController {
      *
      * text/plain z jawnym UTF-8 i Content-Disposition: attachment, więc przeglądarka
      * zapisuje plik zamiast wyświetlać treść, a polskie znaki nie zamieniają się w krzaki.
+     *
+     * PLIK LECI STRUMIENIEM Z MAGAZYNU, nie przez tablicę bajtów: przy większych plikach
+     * wczytanie całości na stertę tylko po to, żeby ją zaraz zapisać do gniazda, mnoży
+     * zużycie pamięci przez liczbę równoczesnych pobrań. Strumień zamyka Spring po zapisaniu
+     * ciała odpowiedzi.
+     *
+     * DLACZEGO NIE PRZEKIEROWANIE NA PRESIGNED URL, mimo że odciążyłoby aplikację: dostępu
+     * do cudzego zlecenia pilnuje warunek na user_id w zapytaniu, dzięki czemu cudze id daje
+     * 404, a nie 403. Presigned URL to link OKAZICIELSKI - kto go przechwyci, pobierze plik
+     * bez ciasteczka, a samo jego wydanie potwierdza, że zlecenie o tym id istnieje.
+     * Wyzwalacz do rewizji: pliki na tyle duże, że przesyłanie ich przez aplikację zacznie
+     * kosztować - wtedy cena jest płacona świadomie.
      */
     @GetMapping("/{id}/content")
-    public ResponseEntity<byte[]> download(@PathVariable Long id,
-                                           @AuthenticationPrincipal User user) {
+    public ResponseEntity<Resource> download(@PathVariable Long id,
+                                             @AuthenticationPrincipal User user) {
 
-        TranslationResultView result = translationService.getOwnResult(user, id);
-        byte[] body = result.resultContent().getBytes(StandardCharsets.UTF_8);
+        TranslationContent content = translationService.openOwnResult(user, id);
 
         /*
          * Nagłówek budowany przez ContentDisposition, NIGDY przez sklejanie tekstu.
@@ -106,13 +119,19 @@ public class TranslationController {
          * Builder robi jedno i drugie sam.
          */
         ContentDisposition disposition = ContentDisposition.attachment()
-                .filename(translatedFilename(result), StandardCharsets.UTF_8)
+                .filename(translatedFilename(content), StandardCharsets.UTF_8)
                 .build();
 
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_DISPOSITION, disposition.toString())
-                .contentType(new MediaType(MediaType.TEXT_PLAIN, StandardCharsets.UTF_8))
-                .body(body);
+                // Typ treści z ROZPOZNANEGO formatu, nie na sztywno text/plain: przeglądarka
+                // po nim decyduje, co zrobić z plikiem, a PDF podany jako tekst otwiera się
+                // w karcie jako krzaki zamiast trafić do czytnika.
+                .contentType(MediaType.parseMediaType(content.fileType().contentType()))
+                // Content-Length znany z metadanych obiektu - bez niego odpowiedź leci
+                // kodowaniem porcjowym i przeglądarka nie pokazuje postępu pobierania.
+                .contentLength(content.object().size())
+                .body(new InputStreamResource(content.object().content()));
     }
 
     @DeleteMapping("/{id}")
@@ -122,12 +141,16 @@ public class TranslationController {
         return ResponseEntity.noContent().build();
     }
 
-    /** "lista.txt" + EN-GB -> "lista-EN-GB.txt". Rozszerzenie zostaje na końcu, gdzie ma być. */
-    private String translatedFilename(TranslationResultView result) {
-        String original = result.originalFilename();
-        int dot = original.toLowerCase(Locale.ROOT).lastIndexOf(".txt");
+    /**
+     * "lista.txt" + EN-GB -> "lista-EN-GB.txt". Rozszerzenie zostaje na końcu, gdzie ma być,
+     * i bierze się z ROZPOZNANEGO formatu - nie z nazwy przysłanej przez klienta.
+     */
+    private String translatedFilename(TranslationContent content) {
+        String extension = content.fileType().extension();
+        String original = content.originalFilename();
+        int dot = original.toLowerCase(Locale.ROOT).lastIndexOf(extension);
         String base = dot > 0 ? original.substring(0, dot) : original;
-        return base + "-" + result.targetLang().apiCode() + ".txt";
+        return base + "-" + content.targetLang().apiCode() + extension;
     }
 
     private Pageable capped(Pageable pageable) {

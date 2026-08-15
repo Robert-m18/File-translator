@@ -8,6 +8,7 @@ import com.example.robert.translation.provider.TranslationProvider;
 import com.example.robert.translation.provider.TranslationProviderException;
 import com.example.robert.translation.provider.TranslationResult;
 import com.example.robert.translation.repository.TranslationJobRepository;
+import com.example.robert.translation.storage.ObjectStore;
 import com.example.robert.common.time.DbClock;
 import com.example.robert.user.UserRepository;
 import com.example.robert.user.model.User;
@@ -56,6 +57,9 @@ class TranslationWorkerTest {
     private TranslationJobRepository jobRepository;
 
     @Autowired
+    private ObjectStore objectStore;
+
+    @Autowired
     private UserRepository userRepository;
 
     @Autowired
@@ -80,9 +84,8 @@ class TranslationWorkerTest {
     }
 
     private TranslationJob newJob(String content) {
-        return jobRepository.save(new TranslationJob(
-                owner, "plik.txt", TargetLanguage.EN_GB, content,
-                TokenHasher.sha256Hex(content), DbClock.now(), false));
+        return jobRepository.save(TranslationTestSupport.storedJob(
+                objectStore, owner, "plik.txt", TargetLanguage.EN_GB, content));
     }
 
     /**

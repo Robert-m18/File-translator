@@ -15,6 +15,7 @@ import com.example.robert.translation.exception.TranslationJobNotFoundException;
 import com.example.robert.translation.exception.TranslationNotReadyException;
 import com.example.robert.translation.exception.TranslationQuotaExceededException;
 import com.example.robert.translation.model.TargetLanguage;
+import com.example.robert.translation.storage.ObjectMissingException;
 import lombok.extern.slf4j.Slf4j;
 import org.hibernate.exception.ConstraintViolationException;
 import org.springframework.beans.TypeMismatchException;
@@ -204,6 +205,27 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
                 ex.getMessage(), "TRANSLATION_NOT_READY");
         problem.setProperty("status", ex.getStatus());
         return problem;
+    }
+
+    /**
+     * Wiersz zlecenia jest, ale jego pliku nie ma już w magazynie obiektowym.
+     *
+     * 410 GONE, a nie 404 ani 500, i każda z tych trzech odpowiedzi znaczyłaby co innego:
+     * 404 kłamałoby, bo zlecenie istnieje i widać je na liście; 500 sugerowałoby awarię
+     * do zgłoszenia, a to jest stan przewidziany.
+     *
+     * Ten stan jest ceną za to, że retencja żyje w DWÓCH miejscach: wiersze kasuje
+     * TranslationCleanupJob według app.translation.retention, a pliki - reguła wygasania
+     * na kubełku. Nic tych dwóch wartości nie wiąże poza uważnością, więc rozjazd musi mieć
+     * objaw, po którym da się go rozpoznać. Powtarzające się CONTENT_EXPIRED przy zleceniach
+     * młodszych niż retencja znaczy dokładnie jedno: reguła na kubełku kasuje za wcześnie.
+     */
+    @ExceptionHandler(ObjectMissingException.class)
+    public ProblemDetail handleObjectMissing(ObjectMissingException ex) {
+        log.warn("Plik zlecenia nie istnieje już w magazynie - sprawdź regułę wygasania "
+                + "na kubełku wobec app.translation.retention");
+        return ApiProblem.of(HttpStatus.GONE, "Plik niedostępny",
+                "Plik nie jest już przechowywany - zleć tłumaczenie ponownie", "CONTENT_EXPIRED");
     }
 
     @ExceptionHandler(TranslationQuotaExceededException.class)

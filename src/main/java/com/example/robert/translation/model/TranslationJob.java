@@ -30,11 +30,11 @@ import java.time.Instant;
  * Uzasadnienie modelu, mechaniki rezerwacji i długości kolumn: changelog
  * 0007-translation-jobs.xml.
  *
- * UWAGA przy odczytach: encja niesie dwie kolumny tekstowe po ~1 MB. Pobieranie jej przez
- * findById tylko po to, żeby pokazać status albo nazwę pliku, wciąga całą treść źródła
- * i wyniku - przy liście zleceń użytkownika to dziesiątki megabajtów na jedno żądanie.
- * Dlatego odczyty prezentacyjne idą przez projekcje w TranslationJobRepository, a nie
- * przez tę klasę.
+ * TREŚCI PLIKÓW TU NIE MA - od changesetu 0011 leżą w magazynie obiektowym, a wiersz
+ * trzyma same klucze. Odczyty prezentacyjne dalej idą przez projekcje
+ * w TranslationJobRepository: powód przestał być rozmiarem wiersza, ale zasada się nie
+ * zmienia, bo projekcja jest też tym, co pilnuje, żeby przez API nie wyciekło pole,
+ * którego nikt nie zamierzał pokazywać.
  */
 @Getter
 @Setter
@@ -69,14 +69,45 @@ public class TranslationJob {
     @Column(nullable = false, length = 20)
     private TranslationStatus status = TranslationStatus.PENDING;
 
-    // Długości muszą być lustrzane wobec changesetu 0007. Powyżej maksymalnej długości
-    // varchara dialektu Hibernate oczekuje CLOB-a i ddl-auto: validate wywala start -
-    // to jest górna granica dla podnoszenia limitu uploadu.
-    @Column(name = "source_content", nullable = false, length = 262_144)
-    private String sourceContent;
+    /**
+     * Klucz pliku źródłowego w magazynie obiektowym. Nie URL - uzasadnienie w ObjectStore
+     * i w changesecie 0011.
+     *
+     * Ustawiany w konstruktorze, bo obiekt jest zapisywany PRZED wstawieniem wiersza:
+     * wiersz bez pliku to zlecenie, które nigdy się nie wykona, a osierocony plik to tylko
+     * zajęte miejsce, które sprząta reguła wygasania na kubełku.
+     */
+    @Column(name = "source_object_key", nullable = false, length = 512)
+    private String sourceObjectKey;
 
-    @Column(name = "result_content", length = 524_288)
-    private String resultContent;
+    /** Klucz wyniku. NULL do chwili udanego tłumaczenia - tak jak wcześniej result_content. */
+    @Column(name = "result_object_key", length = 512)
+    private String resultObjectKey;
+
+    /**
+     * Format pliku - rozpoznany po ZAWARTOŚCI przy wgrywaniu, nie po nazwie.
+     *
+     * Decyduje też o tym, którym API dostawcy tłumaczyć: tekst idzie zwykłym, PDF i XLSX
+     * dokumentowym. Uzasadnienie obu ścieżek: FileType.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "file_type", nullable = false, length = 10)
+    private FileType fileType = FileType.TXT;
+
+    /**
+     * Uchwyt do dokumentu wgranego u dostawcy - NULL dla zleceń tekstowych i dopóki dokument
+     * nie został wgrany.
+     *
+     * Zapisany, żeby rezerwacja, która wygasła w trakcie tłumaczenia, mogła WRÓCIĆ do
+     * odpytywania zamiast wgrywać dokument (i płacić za niego) drugi raz. Pełne uzasadnienie:
+     * DocumentHandle i changeset 0013.
+     */
+    @Column(name = "provider_document_id", length = 255)
+    private String providerDocumentId;
+
+    /** Sekret wystawiony przez dostawcę razem z identyfikatorem. NIE trafia do logów. */
+    @Column(name = "provider_document_key", length = 255)
+    private String providerDocumentKey;
 
     /**
      * SHA-256 treści źródłowej, szesnastkowo - odcisk pod deduplikację.
@@ -149,17 +180,22 @@ public class TranslationJob {
     public TranslationJob(User user,
                           String originalFilename,
                           TargetLanguage targetLang,
-                          String sourceContent,
+                          FileType fileType,
+                          String sourceObjectKey,
                           String contentHash,
+                          int charCount,
                           Instant now,
                           boolean expectedCacheHit) {
         this.user = user;
         this.originalFilename = originalFilename;
         this.targetLang = targetLang;
-        this.sourceContent = sourceContent;
+        this.fileType = fileType;
+        this.sourceObjectKey = sourceObjectKey;
         this.contentHash = contentHash;
-        this.charCount = sourceContent.length();
-        this.billedChars = expectedCacheHit ? 0 : this.charCount;
+        // charCount podawany z zewnątrz, bo treści już tutaj nie ma - plik leży
+        // w magazynie obiektowym, a długość policzył ten, kto go tam wgrał.
+        this.charCount = charCount;
+        this.billedChars = expectedCacheHit ? 0 : charCount;
         this.status = TranslationStatus.PENDING;
         this.attempts = 0;
         // Gotowe do wzięcia natychmiast - worker zabierze je przy najbliższym cyklu

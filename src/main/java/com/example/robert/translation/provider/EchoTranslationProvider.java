@@ -9,6 +9,10 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+
 /**
  * Dostawca, który niczego nie tłumaczy - oznacza tylko każdą linię kodem języka docelowego.
  *
@@ -48,5 +52,47 @@ public class EchoTranslationProvider implements TranslationProvider {
                 .orElse("");
 
         return new TranslationResult(marked, UNKNOWN_SOURCE);
+    }
+
+    /* ---------------------------------------------------------------------------------
+     * Dokumenty. Atrapa ODDAJE PLIK BEZ ZMIAN - i to jest tu jedyna uczciwa odpowiedź:
+     * doklejenie znacznika do PDF-a albo XLSX-a dałoby plik uszkodzony, czyli objaw
+     * wyglądający na błąd w kodzie zamiast na atrapę. Ostrzeżenie przy starcie mówi wprost,
+     * że nic nie jest tłumaczone.
+     *
+     * Odwzorowuje za to DWIE własności protokołu, na których stoi worker, bo inaczej testy
+     * na atrapie nie sprawdzałyby tego, co dzieje się naprawdę:
+     *  - dokument da się pobrać TYLKO RAZ (potem DocumentUnavailableException),
+     *  - uchwyt jest nieprzezroczysty i trzeba go zapamiętać, żeby wrócić po wynik.
+     * --------------------------------------------------------------------------------- */
+
+    private final Map<String, byte[]> documents = new ConcurrentHashMap<>();
+
+    @Override
+    public DocumentHandle uploadDocument(byte[] content, String filename, TargetLanguage target) {
+        String documentId = UUID.randomUUID().toString();
+        documents.put(documentId, content.clone());
+        return new DocumentHandle(documentId, UUID.randomUUID().toString());
+    }
+
+    @Override
+    public DocumentStatus checkDocument(DocumentHandle handle) {
+        byte[] content = documents.get(handle.documentId());
+        if (content == null) {
+            // Pobrany albo nieznany - dla workera to ten sam przypadek: trzeba zacząć od nowa.
+            return new DocumentStatus(DocumentStatus.State.ERROR, null, "Dokument nie istnieje");
+        }
+        // Atrapa nie ma czego kolejkować, więc jest gotowa od razu. Ścieżkę odpytywania
+        // (QUEUED/TRANSLATING) sprawdza test podstawiający własną implementację portu.
+        return new DocumentStatus(DocumentStatus.State.DONE, content.length, null);
+    }
+
+    @Override
+    public byte[] downloadDocument(DocumentHandle handle) {
+        byte[] content = documents.remove(handle.documentId());
+        if (content == null) {
+            throw new DocumentUnavailableException("Dokument został już pobrany albo nie istnieje");
+        }
+        return content;
     }
 }

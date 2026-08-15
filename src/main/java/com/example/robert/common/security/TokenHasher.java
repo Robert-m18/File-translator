@@ -12,7 +12,7 @@ import java.util.HexFormat;
 /**
  * Liczy SHA-256 tokenu zapisywany w bazie.
  *
- * MIMO NAZWY służy też do czegoś drugiego: UploadedTextFile liczy nią odcisk treści wgranego
+ * MIMO NAZWY służy też do czegoś drugiego: UploadedFile liczy nią odcisk treści wgranego
  * pliku pod deduplikację tłumaczeń. Nazwa została, bo tokeny są tu głównym zastosowaniem,
  * a przemianowanie ruszyłoby cały moduł auth przy okazji niezwiązanej zmiany. Istotne jest to,
  * że algorytm ma w projekcie DOKŁADNIE jedno miejsce - druga kopia rozjechałaby się po cichu.
@@ -32,10 +32,21 @@ public final class TokenHasher {
     }
 
     public static String sha256Hex(String rawToken) {
+        return sha256Hex(rawToken.getBytes(StandardCharsets.UTF_8));
+    }
+
+    /**
+     * Wariant dla surowych bajtów - odcisk wgranego pliku.
+     *
+     * Potrzebny od czasu formatów binarnych: PDF-a nie da się zamienić na String bez
+     * uszkodzenia go, a odcisk musi być liczony z DOKŁADNIE tych bajtów, które pojadą
+     * do dostawcy. Dla plików tekstowych wynik jest identyczny z wariantem powyżej,
+     * bo tamten po prostu koduje łańcuch do UTF-8 i woła tę metodę.
+     */
+    public static String sha256Hex(byte[] content) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            byte[] hashed = digest.digest(rawToken.getBytes(StandardCharsets.UTF_8));
-            return HexFormat.of().formatHex(hashed);
+            return HexFormat.of().formatHex(digest.digest(content));
         } catch (NoSuchAlgorithmException e) {
             // Nie wystąpi - SHA-256 jest wymagane przez specyfikację każdej JVM
             throw new IllegalStateException("Brak algorytmu SHA-256", e);

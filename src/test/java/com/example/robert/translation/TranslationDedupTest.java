@@ -5,6 +5,7 @@ import com.example.robert.translation.provider.TranslationProvider;
 import com.example.robert.translation.provider.TranslationProviderException;
 import com.example.robert.translation.provider.TranslationResult;
 import com.example.robert.translation.repository.TranslationJobRepository;
+import com.example.robert.translation.storage.ObjectStore;
 import com.example.robert.user.UserRepository;
 import com.jayway.jsonpath.JsonPath;
 import jakarta.servlet.http.Cookie;
@@ -71,6 +72,9 @@ class TranslationDedupTest {
     private TranslationJobRepository jobRepository;
 
     @Autowired
+    private ObjectStore objectStore;
+
+    @Autowired
     private UserRepository userRepository;
 
     @Autowired
@@ -113,8 +117,15 @@ class TranslationDedupTest {
         return id;
     }
 
+    /**
+     * Treść wyniku leży w magazynie obiektowym, a wiersz trzyma sam klucz - stąd dwa kroki
+     * zamiast jednego gettera. Ten odczyt jest zarazem sprawdzeniem, że trafienie w cache
+     * SKOPIOWAŁO plik pod klucz nowego zlecenia, a nie tylko przepisało wskazanie: gdyby
+     * kopiowanie wypadło, klucz wskazywałby na nieistniejący obiekt i odczyt by się wywalił.
+     */
     private String resultOf(long jobId) {
-        return jobRepository.findById(jobId).orElseThrow().getResultContent();
+        String key = jobRepository.findById(jobId).orElseThrow().getResultObjectKey();
+        return new String(objectStore.read(key), StandardCharsets.UTF_8);
     }
 
     /**
