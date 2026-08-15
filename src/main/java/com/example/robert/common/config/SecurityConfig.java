@@ -4,6 +4,7 @@
  */
 package com.example.robert.common.config;
 
+import com.example.robert.common.security.BlockedAccountChecker;
 import com.example.robert.common.security.CookieProperties;
 import com.example.robert.common.security.JwtFilter;
 import com.example.robert.common.security.JwtUtil;
@@ -264,6 +265,10 @@ public class SecurityConfig {
                                                        ApplicationEventPublisher applicationEventPublisher) {
         DaoAuthenticationProvider provider = new DaoAuthenticationProvider(userDetailsService);
         provider.setPasswordEncoder(passwordEncoder);
+        // Blokada administracyjna odsiewana PRZED porównaniem hasła, z własnym kodem
+        // ACCOUNT_BLOCKED zamiast ogólnego ACCOUNT_LOCKED. Checker deleguje do domyślnych
+        // sprawdzeń - uzasadnienie i pułapka pominięcia delegata: BlockedAccountChecker.
+        provider.setPreAuthenticationChecks(new BlockedAccountChecker());
         // Domyślnie true: brak użytkownika zgłaszany jest jako BadCredentialsException,
         // czyli tak samo jak złe hasło. Zostawiamy - inaczej API pozwalałoby sprawdzać,
         // które adresy email są zarejestrowane.

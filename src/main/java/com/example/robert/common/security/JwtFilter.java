@@ -8,6 +8,7 @@ import com.example.robert.common.security.ProblemResponseWriter;
 import com.example.robert.common.exception.JwtAuthenticationException;
 import com.example.robert.common.web.ApiProblem;
 import com.example.robert.auth.CookieService;
+import com.example.robert.user.model.User;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.Cookie;
@@ -68,8 +69,8 @@ public class JwtFilter extends OncePerRequestFilter {
              * ODŚWIEŻAJĄCY jest podpisany tym samym kluczem - podstawiony w ciasteczko
              * accessToken przechodziłby tędy jako pełnoprawne uwierzytelnienie.
              *
-             * To nie jest teoretyczne: token odświeżający żyje 7 dni, a ten filtr w ogóle
-             * nie zagląda do bazy. Unieważnianie sesji działa na rodzinach tokenów
+             * To nie jest teoretyczne: token odświeżający żyje 7 dni, a ten filtr nie
+             * sprawdza stanu SESJI. Unieważnianie sesji działa na rodzinach tokenów
              * odświeżających sprawdzanych w AuthService.refreshToken, więc bez tego
              * sprawdzenia WYLOGOWANA sesja otwierałaby chronione endpointy jeszcze przez
              * tydzień. AuthService robi kontrolę lustrzaną w drugą stronę (odsiewa access
@@ -100,6 +101,32 @@ public class JwtFilter extends OncePerRequestFilter {
 
             if (username != null && !alreadyAuthenticated) {
                 UserDetails userDetails = userDetailsService.loadUserByUsername(username);
+
+                /*
+                 * 3a. Konto zablokowane przez administratora nie przechodzi dalej, choćby
+                 * token był bez zarzutu. Blokada ma działać NATYCHMIAST, a nie po wygaśnięciu
+                 * żywego tokenu dostępowego - inaczej zablokowany pracowałby jeszcze przez
+                 * 15 minut. To jedyne miejsce, w którym da się to domknąć, i wolno tu było
+                 * dołożyć sprawdzenie tylko dlatego, że wiersz użytkownika i tak jest już
+                 * w ręku: loadUserByUsername wyżej czyta go z bazy przy KAŻDYM
+                 * uwierzytelnionym żądaniu. Koszt wynosi zero zapytań.
+                 *
+                 * SPRAWDZAMY WYŁĄCZNIE isBlocked(), NIGDY isAccountNonLocked(). Ta druga
+                 * obejmuje także blokadę po nieudanych logowaniach, a tę wywołuje KAŻDY,
+                 * kto zna czyjś adres i wpisze kilka razy złe hasło. Ogólne sprawdzenie
+                 * zamieniłoby więc automatyczną blokadę w narzędzie do wybijania dowolnego
+                 * zalogowanego użytkownika z aplikacji. Kontrola negatywna:
+                 * AdminPanelTest.failedLoginLockout_shouldNotKillLiveSession.
+                 *
+                 * JwtFilterTest tej gałęzi nie pokryje - mockuje loadUserByUsername na
+                 * org.springframework.security.core.userdetails.User, więc instanceof naszej
+                 * encji jest tam fałszywy i test przechodzi niezależnie od tej linii.
+                 * Ta sama sytuacja co CurrentUserTest kontra JwtFilterTest.
+                 */
+                if (userDetails instanceof User user && user.isBlocked()) {
+                    throw new JwtAuthenticationException(
+                            "Konto zostało zablokowane przez administratora", "ACCOUNT_BLOCKED");
+                }
 
                 // Bez adresu email w treści - to dana osobowa, a ten log wykonuje się teraz
                 // przy KAŻDYM żądaniu zalogowanego użytkownika (wcześniej ścieżka sukcesu tego

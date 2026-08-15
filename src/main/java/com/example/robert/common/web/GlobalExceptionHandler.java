@@ -4,6 +4,9 @@
  */
 package com.example.robert.common.web;
 
+import com.example.robert.admin.exception.AdminActionRejectedException;
+import com.example.robert.admin.exception.AdminUserNotFoundException;
+import com.example.robert.common.exception.AccountBlockedException;
 import com.example.robert.common.exception.InvalidTokenException;
 import com.example.robert.common.exception.JwtAuthenticationException;
 import com.example.robert.common.exception.TokenExpiredException;
@@ -95,6 +98,47 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         return ApiProblem.of(HttpStatus.LOCKED, "Konto zablokowane",
                 "Konto zostało tymczasowo zablokowane po zbyt wielu nieudanych próbach logowania. "
                         + "Spróbuj ponownie później.", "ACCOUNT_LOCKED");
+    }
+
+    /**
+     * Konto zablokowane przez ADMINISTRATORA - inny stan niż blokada po nieudanych
+     * logowaniach obsłużona wyżej.
+     *
+     * Handler stoi obok handleLocked i wygrywa z nim, bo Spring wybiera metodę
+     * najbardziej szczegółową, a AccountBlockedException dziedziczy po LockedException.
+     * To dziedziczenie jest tu fail-safe: gdyby ten handler kiedyś zniknął, odpowiedź
+     * spadnie do 423 ACCOUNT_LOCKED zamiast do 500 - użytkownik dostanie gorszy komunikat,
+     * ale konto pozostanie zamknięte.
+     *
+     * Kod ACCOUNT_BLOCKED musi być odrębny od ACCOUNT_LOCKED, bo front rozgałęzia się po
+     * nim: blokada administracyjna nie mija sama i nie ma sensu radzić "spróbuj później".
+     */
+    @ExceptionHandler(AccountBlockedException.class)
+    public ProblemDetail handleAccountBlocked(AccountBlockedException ex) {
+        log.warn("Próba użycia konta zablokowanego przez administratora");
+        return ApiProblem.of(HttpStatus.LOCKED, "Konto zablokowane",
+                "Konto zostało zablokowane przez administratora. Skontaktuj się z obsługą.",
+                "ACCOUNT_BLOCKED");
+    }
+
+    @ExceptionHandler(AdminUserNotFoundException.class)
+    public ProblemDetail handleAdminUserNotFound(AdminUserNotFoundException ex) {
+        log.warn("Panel administracyjny: nie znaleziono konta o podanym id");
+        return ApiProblem.of(HttpStatus.NOT_FOUND, "Nie znaleziono",
+                ex.getMessage(), "USER_NOT_FOUND");
+    }
+
+    /**
+     * Akcja panelu odrzucona ze względu na stan systemu (blokada siebie, ostatni
+     * administrator). 409, bo żądanie jest poprawne - to sytuacja po stronie serwera
+     * czyni je niewykonalnym. Kod maszynowy przychodzi z wyjątku, bo przyczyny są dwie,
+     * a front komunikuje je inaczej.
+     */
+    @ExceptionHandler(AdminActionRejectedException.class)
+    public ProblemDetail handleAdminActionRejected(AdminActionRejectedException ex) {
+        log.warn("Panel administracyjny: odrzucono akcję ({})", ex.getCode());
+        return ApiProblem.of(HttpStatus.CONFLICT, "Akcja niedozwolona",
+                ex.getMessage(), ex.getCode());
     }
 
     @ExceptionHandler(InvalidTokenException.class)
