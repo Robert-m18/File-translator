@@ -130,6 +130,12 @@ app:
       api-key: ""
       connect-timeout: 1s
       read-timeout: 2s
+  # Magazyn w pamięci procesu - z tego samego powodu, dla którego testy chodzą na H2
+  # i na atrapie tłumacza: suite ma nie wymagać stojącej infrastruktury. Prawdziwy
+  # S3ObjectStore jest wykonywany wyłącznie w jobie "integration" (MinIO w kontenerze),
+  # tak samo jak RedisBucketProvider.
+  storage:
+    type: memory
   account-lock:
     enabled: true
     max-attempts: 3

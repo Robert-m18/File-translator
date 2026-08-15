@@ -17,12 +17,31 @@
 		<java.version>21</java.version>
 		<springdoc.version>3.0.0</springdoc.version>
 		<bucket4j.version>8.14.0</bucket4j.version>
+		<awssdk.version>2.53.1</awssdk.version>
 		<jacoco.version>0.8.13</jacoco.version>
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 		<!-- Wypełniane przez jacoco:prepare-agent; pusta wartość domyślna sprawia,
 		     że Surefire działa też wtedy, gdy JaCoCo nie zostało uruchomione. -->
 		<surefireArgLine/>
 	</properties>
+	<!--
+		BOM AWS SDK v2. Wersji tych artefaktów NIE zarządza BOM Spring Boota (to nie jest
+		biblioteka z jego ekosystemu), więc bez tego importu każdą trzeba by podawać z osobna
+		i pilnować, żeby się nie rozjechały - a SDK jest wielomodułowy i moduły muszą być
+		w tej samej wersji.
+	-->
+	<dependencyManagement>
+		<dependencies>
+			<dependency>
+				<groupId>software.amazon.awssdk</groupId>
+				<artifactId>bom</artifactId>
+				<version>${awssdk.version}</version>
+				<type>pom</type>
+				<scope>import</scope>
+			</dependency>
+		</dependencies>
+	</dependencyManagement>
+
 	<dependencies>
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
@@ -159,6 +178,39 @@
 		<dependency>
 			<groupId>io.lettuce</groupId>
 			<artifactId>lettuce-core</artifactId>
+		</dependency>
+
+		<!--
+			Magazyn obiektowy na pliki użytkowników (S3, a lokalnie MinIO).
+
+			AWS SDK v2 WPROST, bez Spring Cloud AWS: to jedna zależność zamiast BOM-u
+			o własnym cyklu wydań, który przy Spring Boocie 4 (rozbite autokonfiguracje,
+			Jackson 3) byłby kolejną powierzchnią niespodzianek. S3Client budujemy jawnym
+			@Bean-em, więc widać wprost, skąd bierze się endpoint i poświadczenia.
+
+			url-connection-client zamiast domyślnego klienta Apache: wystarcza w zupełności
+			(żądania idą z puli wątków workera, nie asynchronicznie), a wyklucza z drzewa
+			zależności całe apache-httpclient. Wykluczenia poniżej są konieczne - bez nich
+			SDK znajduje na ścieżce klas DWA klienty synchroniczne i odmawia startu
+			komunikatem "Multiple HTTP implementations were found".
+		-->
+		<dependency>
+			<groupId>software.amazon.awssdk</groupId>
+			<artifactId>s3</artifactId>
+			<exclusions>
+				<exclusion>
+					<groupId>software.amazon.awssdk</groupId>
+					<artifactId>apache-client</artifactId>
+				</exclusion>
+				<exclusion>
+					<groupId>software.amazon.awssdk</groupId>
+					<artifactId>netty-nio-client</artifactId>
+				</exclusion>
+			</exclusions>
+		</dependency>
+		<dependency>
+			<groupId>software.amazon.awssdk</groupId>
+			<artifactId>url-connection-client</artifactId>
 		</dependency>
 
 		<!-- Dokumentacja API generowana z kodu (OpenAPI 3 + Swagger UI) -->

@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="0011-01-translation-object-keys" author="robert">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <columnExists tableName="translation_jobs" columnName="source_object_key"/>
+            </not>
+        </preConditions>
+
+        <!--
+            Klucze obiektów w magazynie plików. Zastępują kolumny source_content
+            i result_content, które znikają w changesecie 0012.
+
+            PO CO: VARCHAR nie jest magazynem plików i przestaje wystarczać dosłownie,
+            a nie estetycznie. Powyżej maksymalnej długości varchara dialektu Hibernate
+            oczekuje CLOB-a i ddl-auto: validate wywala start - to była górna granica
+            limitu uploadu (256 KB). PDF-a nie da się w tym trzymać w żadnym rozmiarze,
+            bo to nie jest tekst.
+
+            KLUCZ, NIGDY URL. URL niesie kubełek, region, endpoint i schemat, a każde
+            z nich zmienia się przy przenosinach do innego dostawcy, postawieniu CDN-a
+            albo zwykłej różnicy dev/prod; presigned URL do tego wygasa. Klucz jest jedyną
+            stabilną tożsamością obiektu - adres wylicza się z niego przy odczycie,
+            a z zapisanego URL-a nie da się odzyskać niczego.
+
+            UKŁAD KLUCZA: users/{userId}/jobs/{uuid}/source.{ext}, budowany wyłącznie
+            przez ObjectKeys. Segment zlecenia to UUID, a NIE id wiersza, i to nie jest
+            dowolność: obiekt musi zostać zapisany PRZED wstawieniem wiersza (inaczej
+            wiersz wskazywałby na plik, którego może nie być), a klucz z id wiersza
+            wymagałby najpierw wstawienia wiersza.
+
+            512 znaków z zapasem: realny klucz ma około sześćdziesięciu.
+        -->
+        <addColumn tableName="translation_jobs">
+            <column name="source_object_key" type="VARCHAR(512)"/>
+        </addColumn>
+
+        <!--
+            NULL aż do udanego tłumaczenia - dokładnie tak, jak wcześniej zachowywało się
+            result_content. Trafienie w deduplikację też wypełnia tę kolumnę, bo wynik jest
+            KOPIOWANY pod własny prefiks nowego zlecenia (server-side copy, bajty nie
+            przechodzą przez aplikację). Dzięki temu każde zlecenie ma wyłączność na swoje
+            obiekty i skasowanie go nie wymaga sprawdzania, czy ktoś jeszcze ich używa.
+        -->
+        <addColumn tableName="translation_jobs">
+            <column name="result_object_key" type="VARCHAR(512)"/>
+        </addColumn>
+
+        <!--
+            Bez indeksu: po tych kolumnach nikt nie wyszukuje. Klucz odczytuje się zawsze
+            razem z wierszem pobranym po kluczu głównym (z warunkiem na user_id), a nie
+            odwrotnie. Deduplikacja dalej chodzi po idx_translation_jobs_cache.
+        -->
+    </changeSet>
+
+</databaseChangeLog>

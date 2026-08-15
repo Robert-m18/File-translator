@@ -110,7 +110,7 @@ public interface TranslationJobRepository extends JpaRepository<TranslationJob, 
     @Query("""
             update TranslationJob j
             set j.status = com.example.robert.translation.model.TranslationStatus.DONE,
-                j.resultContent = :result,
+                j.resultObjectKey = :resultObjectKey,
                 j.sourceLang = :sourceLang,
                 j.provider = :provider,
                 j.billedChars = :billedChars,
@@ -119,7 +119,7 @@ public interface TranslationJobRepository extends JpaRepository<TranslationJob, 
             where j.id = :id
             """)
     int markDone(@Param("id") Long id,
-                 @Param("result") String result,
+                 @Param("resultObjectKey") String resultObjectKey,
                  @Param("sourceLang") String sourceLang,
                  @Param("provider") TranslationProperties.Provider provider,
                  @Param("billedChars") int billedChars,
@@ -196,14 +196,34 @@ public interface TranslationJobRepository extends JpaRepository<TranslationJob, 
             """)
     Optional<TranslationCompletedEvent> findCompletedEvent(@Param("id") Long id);
 
-    /** Jedyny odczyt, który ma prawo wciągnąć treść wyniku. */
+    /** Wskazanie na wynik: klucz obiektu plus dane do nagłówka pobierania. */
     @Query("""
             select new com.example.robert.translation.dto.TranslationResultView(
-                j.status, j.originalFilename, j.targetLang, j.resultContent)
+                j.status, j.originalFilename, j.targetLang, j.resultObjectKey)
             from TranslationJob j
             where j.id = :id and j.user.id = :userId
             """)
     Optional<TranslationResultView> findResult(@Param("id") Long id, @Param("userId") Long userId);
+
+    /**
+     * Klucz źródła własnego zlecenia - do wyliczenia prefiksu przy kasowaniu plików.
+     *
+     * userId w warunku jak wszędzie: bez niego kasowanie dałoby się skierować na cudzy
+     * prefiks, czyli obejść całą ochronę per wiersz jednym parametrem w adresie.
+     */
+    @Query("select j.sourceObjectKey from TranslationJob j where j.id = :id and j.user.id = :userId")
+    Optional<String> findSourceKey(@Param("id") Long id, @Param("userId") Long userId);
+
+    /**
+     * Klucze źródeł zleceń starszych niż podany moment - do skasowania ich plików przez retencję.
+     *
+     * Osobny odczyt przed kasowaniem wierszy, bo po nim nie ma już skąd wziąć prefiksów.
+     * Reguła wygasania na kubełku i tak jest tu siatką bezpieczeństwa, ale nie zastępuje
+     * tego kroku: gdyby ktoś skrócił app.translation.retention, wiersze zniknęłyby wcześniej
+     * niż pliki, a plików nie miałby już kto wskazać.
+     */
+    @Query("select j.sourceObjectKey from TranslationJob j where j.createdAt < :cutoff")
+    List<String> findSourceKeysCreatedBefore(@Param("cutoff") Instant cutoff);
 
     /**
      * Ile znaków użytkownik faktycznie WYDAŁ U DOSTAWCY od podanego momentu - pod dobowy limit.
@@ -226,9 +246,8 @@ public interface TranslationJobRepository extends JpaRepository<TranslationJob, 
      * Czy użytkownik ma już gotowe tłumaczenie tej treści - sam fakt, bez treści wyniku.
      *
      * To zapytanie leci na ŚCIEŻCE ŻĄDANIA (TranslationService.submit sprawdza nim, czy
-     * naliczyć dobowy limit znaków), więc nie wolno mu wciągać result_content: odpowiedź
-     * "tak" nie jest warta ćwierci megabajta tekstu przeczytanego z dysku. Od kopiowania
-     * wyniku jest findCached, wołane później i już poza żądaniem.
+     * naliczyć dobowy limit znaków), a odpowiada wyłącznie na pytanie "czy jest" - kopiowanie
+     * wyniku robi później findCachedFor, już poza żądaniem.
      *
      * Klucz to userId + odcisk + język docelowy + DOSTAWCA. Ten ostatni nie jest ozdobą:
      * bez niego wynik atrapy (ECHO) zaspokoiłby zlecenie kierowane do DEEPL - jedyny
@@ -241,7 +260,7 @@ public interface TranslationJobRepository extends JpaRepository<TranslationJob, 
               and j.targetLang = :targetLang
               and j.provider = :provider
               and j.status = com.example.robert.translation.model.TranslationStatus.DONE
-              and j.resultContent is not null
+              and j.resultObjectKey is not null
             """)
     boolean existsCached(@Param("userId") Long userId,
                          @Param("contentHash") String contentHash,
@@ -273,7 +292,7 @@ public interface TranslationJobRepository extends JpaRepository<TranslationJob, 
      */
     @Query("""
             select new com.example.robert.translation.dto.TranslationCacheHit(
-                done.resultContent, done.sourceLang)
+                done.resultObjectKey, done.sourceLang)
             from TranslationJob job
             join TranslationJob done
               on done.user.id = job.user.id
@@ -283,14 +302,20 @@ public interface TranslationJobRepository extends JpaRepository<TranslationJob, 
               and done.id <> job.id
               and done.provider = :provider
               and done.status = com.example.robert.translation.model.TranslationStatus.DONE
-              and done.resultContent is not null
+              and done.resultObjectKey is not null
             order by done.id desc
             """)
     List<TranslationCacheHit> findCachedFor(@Param("jobId") Long jobId,
                                             @Param("provider") TranslationProperties.Provider provider,
                                             Limit limit);
 
-    /** Kasowanie własnego zlecenia - userId w warunku, żeby nie dało się skasować cudzego. */
+    /**
+     * Kasowanie własnego zlecenia - userId w warunku, żeby nie dało się skasować cudzego.
+     *
+     * Kasuje WYŁĄCZNIE wiersz. Pliki usuwa TranslationService po zatwierdzeniu tej
+     * transakcji, i ta kolejność jest odwrotna niż przy tworzeniu - uzasadnienie
+     * niezmiennika przy TranslationService.deleteOwn.
+     */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("delete from TranslationJob j where j.id = :id and j.user.id = :userId")
     int deleteOwned(@Param("id") Long id, @Param("userId") Long userId);

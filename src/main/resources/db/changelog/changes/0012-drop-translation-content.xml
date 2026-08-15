@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="0012-01-drop-translation-content" author="robert">
+        <preConditions onFail="MARK_RAN">
+            <columnExists tableName="translation_jobs" columnName="source_content"/>
+        </preConditions>
+
+        <!--
+            UWAGA: TEN CHANGESET KASUJE DANE i nie da się go cofnąć.
+
+            Zlecenia sprzed changesetu 0011 mają treść w kolumnach, a nie w magazynie
+            obiektowym, więc po usunięciu kolumn stają się wierszami bez pliku: lista
+            pokazuje pozycję, a pobranie kończy się błędem. Zostawienie ich byłoby gorsze
+            niż skasowanie - użytkownik widziałby zlecenie, którego nie da się otworzyć,
+            bez żadnego wyjaśnienia.
+
+            DLACZEGO KASUJEMY, A NIE PRZEPISUJEMY DO MAGAZYNU: przepisania nie da się
+            wykonać w przenośnym SQL-u - trzeba by zadania w aplikacji, które wczyta każdy
+            wiersz i wgra go do S3. Przy produkcji byłaby to jedyna dopuszczalna droga
+            i tak trzeba by ją napisać. Tutaj produkcji nie ma, baza deweloperska trzyma
+            kilkanaście wierszy testowych, a retencja i tak kasuje je po 30 dniach.
+            To jest świadoma decyzja podjęta dla TEJ bazy, a nie wzorzec do powtórzenia.
+
+            Kolejność ma znaczenie: najpierw wiersze, potem kolumny. Odwrotnie warunek
+            "source_object_key is null" nie odróżniłby wierszy starych od nowych.
+        -->
+        <delete tableName="translation_jobs">
+            <where>source_object_key IS NULL</where>
+        </delete>
+
+        <dropColumn tableName="translation_jobs" columnName="source_content"/>
+        <dropColumn tableName="translation_jobs" columnName="result_content"/>
+
+        <!--
+            NOT NULL dopiero teraz, gdy nie ma już wierszy bez klucza. Klucz źródła jest
+            znany przy każdym wstawieniu (ustawia go konstruktor encji), więc kolumna nie
+            potrzebuje wartości domyślnej - i lepiej, żeby jej nie miała: domyślny pusty
+            ciąg zamieniłby pominięcie tego pola w nowym kodzie w ciche zlecenia bez pliku
+            zamiast w błąd przy zapisie. Ten sam argument co przy billed_chars (0009).
+
+            result_object_key ZOSTAJE nullable - jest puste do chwili udanego tłumaczenia,
+            dokładnie jak wcześniej result_content.
+        -->
+        <addNotNullConstraint tableName="translation_jobs"
+                              columnName="source_object_key"
+                              columnDataType="VARCHAR(512)"/>
+    </changeSet>
+
+</databaseChangeLog>

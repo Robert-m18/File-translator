@@ -63,6 +63,60 @@ services:
       timeout: 3s
       retries: 10
 
+  # Magazyn obiektowy na pliki użytkowników - lokalne zastępstwo S3, tą samą zasadą
+  # co Mailpit dla poczty: `docker compose up` ma być działającym systemem bez konta
+  # u zewnętrznego dostawcy. Aplikacja rozmawia z nim TYM SAMYM kodem co z AWS
+  # (S3ObjectStore), różnicę robi wyłącznie endpoint i styl adresowania kubełka.
+  #
+  # 9000 to API, 9001 to konsola webowa (http://localhost:9001, minioadmin/minioadmin) -
+  # tam widać, czy pliki faktycznie lądują pod users/{id}/jobs/{uuid}/.
+  minio:
+    image: minio/minio:latest
+    container_name: ft-minio
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      # Jawne poświadczenia deweloperskie, tak samo jak postgres/postgres wyżej.
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: [ "CMD", "mc", "ready", "local" ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  # Zakłada kubełek i regułę wygasania, po czym kończy pracę. Osobna usługa, a nie
+  # polecenie w aplikacji: tworzenie kubełka to czynność administracyjna, a aplikacja
+  # z prawem do zakładania kubełków ma na produkcji za szerokie uprawnienia.
+  minio-init:
+    image: minio/mc:latest
+    container_name: ft-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    # REGUŁA WYGASANIA JEST DRUGĄ POŁOWĄ RETENCJI i to jest tu najważniejsza linia.
+    # Wiersze zleceń kasuje TranslationCleanupJob według app.translation.retention (30 dni),
+    # a pliki - ta reguła. Nic tych dwóch wartości nie wiąże poza uważnością.
+    #
+    # 31 dni, czyli WIĘCEJ niż retencja aplikacji, i kierunek nie jest dowolny: aplikacja
+    # ma kasować pierwsza, a reguła być siatką bezpieczeństwa (łapie pliki osierocone przy
+    # przyjmowaniu zleceń, gdy wiersz nigdy nie powstał). Reguła KRÓTSZA niż retencja
+    # oznaczałaby pliki znikające spod żywych zleceń - użytkownik dostaje wtedy
+    # 410 CONTENT_EXPIRED przy pobieraniu czegoś, co widzi na liście jako gotowe.
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minioadmin minioadmin &&
+      mc mb --ignore-existing local/file-translator &&
+      (mc ilm rule add --expire-days 31 local/file-translator ||
+       mc ilm add --expiry-days 31 local/file-translator || true) &&
+      echo 'MinIO gotowe: kubelek file-translator, wygasanie po 31 dniach'
+      "
+
   app:
     build:
       context: .
@@ -71,6 +125,8 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      minio:
         condition: service_healthy
     ports:
       - "2009:2009"
@@ -93,6 +149,16 @@ services:
       # Zmień na "redis", żeby limity były wspólne dla wszystkich instancji aplikacji
       RATE_LIMIT_STORE: memory
       RATE_LIMIT_REDIS_URL: redis://redis:6379
+      # Magazyn plików. Host "minio" to nazwa usługi w sieci Compose'a, port 9000 to
+      # wewnętrzny port kontenera - nie mapowanie na hoście, tak samo jak przy bazie.
+      # Bez STORAGE_TYPE=s3 aplikacja wstałaby na magazynie w PAMIĘCI i gubiła pliki
+      # przy każdym restarcie kontenera, działając przy tym pozornie poprawnie.
+      STORAGE_TYPE: s3
+      STORAGE_ENDPOINT: http://minio:9000
+      STORAGE_BUCKET: file-translator
+      STORAGE_REGION: eu-central-1
+      STORAGE_ACCESS_KEY: minioadmin
+      STORAGE_SECRET_KEY: minioadmin
       # Konto administratora zakładane przy starcie - bez niego /actuator/metrics
       # i /actuator/prometheus są nieosiągalne dla nikogo. Hasło jest tu jawne świadomie:
       # ten plik jest lokalnym środowiskiem deweloperskim i niesie już postgres/postgres do bazy.
@@ -116,3 +182,4 @@ services:
 
 volumes:
   postgres-data:
+  minio-data:

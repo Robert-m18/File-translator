@@ -11,6 +11,8 @@ import com.example.robert.translation.provider.TranslationProvider;
 import com.example.robert.translation.provider.TranslationProviderException;
 import com.example.robert.translation.provider.TranslationResult;
 import com.example.robert.translation.repository.TranslationJobRepository;
+import com.example.robert.translation.storage.ObjectKeys;
+import com.example.robert.translation.storage.ObjectStore;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
@@ -23,6 +25,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -70,10 +73,15 @@ import java.util.concurrent.atomic.AtomicInteger;
 @Component
 public class TranslationJobWorker {
 
+    /** Na razie jedyny obsługiwany format - to samo rozszerzenie co przy zapisie źródła. */
+    private static final String TEXT_EXTENSION = ".txt";
+    private static final String TEXT_CONTENT_TYPE = "text/plain; charset=UTF-8";
+
     private final TranslationJobRepository repository;
     private final TranslationProvider provider;
     private final TranslationEvents events;
     private final TranslationProperties properties;
+    private final ObjectStore objectStore;
     private final TransactionTemplate shortTransaction;
     private final ExecutorService translators;
     private final MeterRegistry meters;
@@ -82,12 +90,14 @@ public class TranslationJobWorker {
                                 TranslationProvider provider,
                                 TranslationEvents events,
                                 TranslationProperties properties,
+                                ObjectStore objectStore,
                                 PlatformTransactionManager transactionManager,
                                 MeterRegistry meters) {
         this.repository = repository;
         this.provider = provider;
         this.events = events;
         this.properties = properties;
+        this.objectStore = objectStore;
         this.meters = meters;
         registerMeters();
 
@@ -192,13 +202,25 @@ public class TranslationJobWorker {
              * wyraźnie wyższa niż jedno tłumaczenie w rzadkim przypadku.
              */
             Optional<TranslationCacheHit> cached = findCached(job);
+            String resultKey = ObjectKeys.resultKey(
+                    ObjectKeys.prefixOf(job.getSourceObjectKey()), TEXT_EXTENSION);
 
             if (cached.isPresent()) {
+                /*
+                 * Trafienie realizuje się KOPIĄ PO STRONIE MAGAZYNU - bajty nie przechodzą
+                 * przez aplikację. Kopiujemy, zamiast wskazać dwoma zleceniami na jeden
+                 * obiekt, żeby każde zlecenie zachowało wyłączność na swój prefiks: to ona
+                 * pozwala skasować zlecenie jednym wywołaniem, bez liczenia referencji.
+                 *
+                 * Kopia POWSTAJE PRZED zapisem klucza w wierszu - ta sama kolejność
+                 * (obiekt przed wierszem) co przy przyjmowaniu zlecenia.
+                 */
+                objectStore.copy(cached.get().resultObjectKey(), resultKey);
+
                 // 0 znaków do rozliczenia: dostawca nie był wołany, więc dobowy limit nie ma
                 // za co obciążyć tego zlecenia ANI TERAZ, ani przy kolejnych (suma po
                 // billedChars). Przy przyjęciu zapisano to samo, ale dopiero tutaj jest to fakt.
-                markDone(job, new TranslationResult(
-                        cached.get().resultContent(), cached.get().sourceLang()), 0);
+                markDone(job, resultKey, cached.get().sourceLang(), 0);
 
                 countOutcome("done");
                 countCache("hit");
@@ -213,11 +235,26 @@ public class TranslationJobWorker {
             }
             countCache("miss");
 
+            // Treść źródła pobierana z magazynu dopiero TERAZ, na wątku roboczym. Wiersz
+            // zlecenia niesie sam klucz, więc rezerwacja paczki nie czyta plików.
+            String sourceContent = new String(
+                    objectStore.read(job.getSourceObjectKey()), StandardCharsets.UTF_8);
+
             TranslationResult result = timeProviderCall(() ->
-                    provider.translate(job.getSourceContent(), job.getTargetLang()));
+                    provider.translate(sourceContent, job.getTargetLang()));
+
+            /*
+             * Wynik trafia do magazynu PRZED zapisaniem klucza w wierszu. Gdyby proces padł
+             * pomiędzy, zostanie obiekt bez wskazania - zlecenie wróci po upływie rezerwacji
+             * i nadpisze ten sam klucz, bo prefiks zależy od zlecenia, a nie od podejścia.
+             * Odwrotna kolejność dałaby wiersz DONE wskazujący na plik, którego nie ma.
+             */
+            objectStore.put(resultKey, result.translatedText().getBytes(StandardCharsets.UTF_8),
+                    TEXT_CONTENT_TYPE);
+
             // Dostawca był wołany, więc znaki są wydane - także wtedy, gdy przy przyjęciu
             // zlecenie wyglądało na trafienie, a gotowy wiersz zniknął przed jego obróbką.
-            markDone(job, result, job.getCharCount());
+            markDone(job, resultKey, result.detectedSourceLanguage(), job.getCharCount());
 
             countOutcome("done");
             // Znaki, a nie zlecenia: u dostawcy płaci się za znaki, więc to jest jedyna
@@ -266,13 +303,13 @@ public class TranslationJobWorker {
         return hits == null || hits.isEmpty() ? Optional.empty() : Optional.of(hits.get(0));
     }
 
-    private void markDone(TranslationJob job, TranslationResult result, int billedChars) {
+    private void markDone(TranslationJob job, String resultKey, String sourceLang, int billedChars) {
         shortTransaction.execute(status -> {
             // Dostawca zapisywany razem z wynikiem, bo dopiero teraz wiadomo, kto go wykonał.
             // Wchodzi do klucza deduplikacji: bez niego wynik atrapy zaspokoiłby zlecenie
             // kierowane do prawdziwego dostawcy.
-            repository.markDone(job.getId(), result.translatedText(),
-                    result.detectedSourceLanguage(), properties.provider(), billedChars, DbClock.now());
+            repository.markDone(job.getId(), resultKey,
+                    sourceLang, properties.provider(), billedChars, DbClock.now());
             // Dane do powiadomienia biorą się z osobnego zapytania, a nie z job.getUser():
             // encja pochodzi z zamkniętej już transakcji rezerwacji, więc leniwe pole user
             // jest tam martwym proxy. Szczegóły przy findCompletedEvent.

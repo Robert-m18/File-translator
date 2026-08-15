@@ -5,15 +5,18 @@
 package com.example.robert.translation.dto;
 
 /**
- * Gotowy wynik znaleziony w cache'u - dokładnie tyle, ile trzeba, żeby zamknąć nowe zlecenie.
+ * Wskazanie na gotowy wynik znaleziony w cache'u - tyle, ile trzeba, żeby zamknąć nowe zlecenie.
  *
- * Dwa pola, a nie cała encja: TranslationJob niesie source_content i result_content, więc
- * pobranie go po to, żeby przepisać wynik, wciągnęłoby przy okazji treść źródła - drugie
- * ćwierć megabajta, z którego nic tu nie wynika.
+ * KLUCZ, nie treść, i to jest tu więcej niż oszczędność pamięci: mając klucz, trafienie
+ * realizuje się jednym serwerowym CopyObject, więc bajty w ogóle nie przechodzą przez
+ * aplikację. Wersja z treścią musiałaby je pobrać i odesłać z powrotem do magazynu.
  *
- * sourceLang jedzie razem z treścią celowo. To dostawca go wykrył przy pierwszym tłumaczeniu,
- * a treść jest bajt w bajt ta sama, więc wykryłby dokładnie to samo. Pominięcie go zostawiłoby
+ * Kopiujemy, a nie wskazujemy dwoma zleceniami na jeden obiekt: wyłączność zlecenia na swój
+ * prefiks jest tym, co pozwala kasować je jednym wywołaniem, bez liczenia referencji.
+ *
+ * sourceLang jedzie razem celowo. To dostawca go wykrył przy pierwszym tłumaczeniu, a treść
+ * jest bajt w bajt ta sama, więc wykryłby dokładnie to samo. Pominięcie go zostawiłoby
  * zlecenie z cache'a bez języka źródłowego i różnica byłaby widoczna dla użytkownika na liście.
  */
-public record TranslationCacheHit(String resultContent, String sourceLang) {
+public record TranslationCacheHit(String resultObjectKey, String sourceLang) {
 }

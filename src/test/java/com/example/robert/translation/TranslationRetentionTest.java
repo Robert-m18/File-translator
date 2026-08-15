@@ -6,6 +6,7 @@ import com.example.robert.translation.model.TargetLanguage;
 import com.example.robert.translation.model.TranslationJob;
 import com.example.robert.translation.model.TranslationStatus;
 import com.example.robert.translation.repository.TranslationJobRepository;
+import com.example.robert.translation.storage.ObjectStore;
 import com.example.robert.user.UserRepository;
 import com.example.robert.user.model.User;
 import org.junit.jupiter.api.BeforeEach;
@@ -40,6 +41,9 @@ class TranslationRetentionTest {
     private TranslationJobRepository jobRepository;
 
     @Autowired
+    private ObjectStore objectStore;
+
+    @Autowired
     private TranslationProperties properties;
 
     @Autowired
@@ -66,9 +70,8 @@ class TranslationRetentionTest {
      * bez mrugnięcia i błąd wyszedłby dopiero w jobie "integration".
      */
     private Long jobCreatedAgo(Duration age, TranslationStatus status) {
-        TranslationJob job = jobRepository.save(new TranslationJob(
-                owner, "plik.txt", TargetLanguage.EN_GB, "Ala ma kota",
-                TokenHasher.sha256Hex("Ala ma kota"), DbClock.now(), false));
+        TranslationJob job = jobRepository.save(TranslationTestSupport.storedJob(
+                objectStore, owner, "plik.txt", TargetLanguage.EN_GB, "Ala ma kota"));
 
         jdbcTemplate.update("update translation_jobs set created_at = ?, status = ? where id = ?",
                 sql(Instant.now().minus(age)), status.name(), job.getId());

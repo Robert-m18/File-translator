@@ -62,7 +62,12 @@ jobs:
   #     zgodności nie odwzorowuje wiernie - a od tego zależy wyszukiwanie po adresie
   #     email (patrz EmailNormalizer);
   #   - RedisBucketProvider, czyli jedyną gałąź limitera, która na profilu testowym
-  #     nigdy się nie wykonywała.
+  #     nigdy się nie wykonywała;
+  #   - S3ObjectStore, czyli jedyną gałąź magazynu plików, która na profilu testowym
+  #     nigdy się nie wykonuje (tam działa wariant w pamięci). Bez tego joba cały kod
+  #     rozmawiający z S3 - podpisywanie żądań, kasowanie po prefiksie, mapowanie
+  #     braku obiektu na ObjectMissingException - nie byłby wykonany ANI RAZU przed
+  #     wdrożeniem, dokładnie jak Redis przed dołożeniem tego joba.
   integration:
     name: Testy na PostgreSQL i Redisie
     runs-on: ubuntu-latest
@@ -104,6 +109,31 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
+      # MinIO uruchamiany KROKIEM, a nie jako service container obok postgresa i redisa,
+      # i to nie z wygody: kontenery usług w GitHub Actions nie pozwalają podać polecenia
+      # startowego, a obraz minio/minio wymaga argumentu "server /data" - bez niego kontener
+      # tylko wypisuje pomoc i kończy pracę. Docker run daje tę jedną rzecz, której brakuje.
+      - name: Start MinIO
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=minioadmin \
+            -e MINIO_ROOT_PASSWORD=minioadmin \
+            minio/minio:latest server /data
+
+          # Czekanie na gotowość, bo "kontener wystartował" to nie to samo co "przyjmuje
+          # żądania" - ta sama zasada co health check przy bazie.
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:9000/minio/health/live && break
+            sleep 2
+          done
+
+          # Kubełek zakładany z osobna, tak jak robi to usługa minio-init w docker-compose.
+          # Aplikacja go NIE tworzy: prawo do zakładania kubełków jest na produkcji
+          # uprawnieniem administracyjnym i aplikacja nie ma powodu go mieć.
+          docker run --rm --network host minio/mc:latest sh -c "
+            mc alias set local http://127.0.0.1:9000 minioadmin minioadmin &&
+            mc mb --ignore-existing local/file-translator"
+
       - name: Test against PostgreSQL and Redis
         # Przez zmienne środowiskowe, a NIE przez osobny profil testowy: profil trzeba by
         # aktywować w każdej klasie testowej (@ActiveProfiles("test") jest wpisane na sztywno),
@@ -121,6 +151,14 @@ jobs:
           # sprawdza konfigurację połączenia; RateLimitTest sprawdza potem liczenie kubełków.
           APP_RATE_LIMIT_STORE: redis
           APP_RATE_LIMIT_REDIS_URL: redis://127.0.0.1:6379
+          # Magazyn plików na prawdziwym S3 (MinIO) zamiast wariantu w pamięci -
+          # to jedyne miejsce, gdzie S3ObjectStore jest w ogóle wykonywany.
+          APP_STORAGE_TYPE: s3
+          APP_STORAGE_ENDPOINT: http://127.0.0.1:9000
+          APP_STORAGE_BUCKET: file-translator
+          APP_STORAGE_REGION: eu-central-1
+          APP_STORAGE_ACCESS_KEY: minioadmin
+          APP_STORAGE_SECRET_KEY: minioadmin
         run: ./mvnw -B -ntp test
 
       - name: Upload test results

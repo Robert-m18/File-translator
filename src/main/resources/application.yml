@@ -43,8 +43,7 @@ spring:
       # miesięcznie na całe konto, więc plik o rozmiarze 1 MB (czyli do miliona znaków)
       # wyczerpywałby go dwukrotnie jednym żądaniem. Realnym ogranicznikiem dla użytkownika
       # jest i tak app.translation.daily-char-limit - to tutaj odcina tylko to, co nie ma
-      # prawa trafić do pamięci procesu. Podnoszenie wymaga sprawdzenia długości kolumn
-      # source_content/result_content (changeset 0007).
+      # prawa trafić do pamięci procesu.
       max-file-size: 256KB
       # Nieco więcej niż plik: w żądaniu multipart jadą jeszcze nagłówki części i pole
       # targetLang. Bez zapasu poprawny plik o maksymalnym rozmiarze byłby odrzucany.
@@ -129,9 +128,10 @@ app:
     # Musi być wyraźnie dłuższe niż realny czas odpowiedzi dostawcy, inaczej druga instancja
     # zabierze zlecenie, gdy pierwsza jeszcze czeka.
     claim-timeout: 2m
-    # W source_content i result_content leżą PLIKI UŻYTKOWNIKA - to jest powód retencji,
-    # nie rozmiar tabeli. Użytkownik może skasować zlecenie sam; to jest to, co dzieje się,
-    # gdy tego nie zrobi.
+    # W magazynie obiektowym leżą PLIKI UŻYTKOWNIKA - to jest powód retencji, nie rozmiar
+    # tabeli. Użytkownik może skasować zlecenie sam; to jest to, co dzieje się, gdy tego
+    # nie zrobi. UWAGA: druga połowa retencji to reguła wygasania na kubełku (docker-compose),
+    # która MUSI być nie krótsza niż ta wartość - inaczej pliki znikają spod żywych zleceń.
     retention: 30d
     deepl:
       # Konta darmowe mają INNY host niż płatne - pomyłka kończy się odpowiedzią 403,
@@ -143,6 +143,30 @@ app:
       # przy concurrency: 2 wystarczą dwa takie żądania, żeby kolejka stanęła i nie
       # pojawił się przy tym ani jeden wpis w logu.
       read-timeout: 30s
+
+  # Magazyn plików użytkowników. Treść zleceń NIE leży już w bazie - w kolumnach
+  # translation_jobs zostały same klucze obiektów.
+  storage:
+    # memory - mapa w pamięci procesu; pliki giną przy restarcie i nie są współdzielone
+    #          między instancjami. Poprawne wyłącznie w testach.
+    # s3     - MinIO z docker compose albo prawdziwe AWS S3.
+    #
+    # Domyślnie memory, tą samą zasadą co provider: echo. Brak skonfigurowanego magazynu
+    # ma dawać działającą aplikację, a nie taką, która nie wstaje. InMemoryObjectStore
+    # ostrzega przy starcie, więc pomyłka jest widoczna w logu, a nie dopiero po restarcie.
+    type: "${STORAGE_TYPE:memory}"
+    # Pusty endpoint = prawdziwe AWS (adres wylicza SDK z regionu i nazwy kubełka).
+    # Dla MinIO trzeba go podać - patrz docker-compose.yml.
+    endpoint: "${STORAGE_ENDPOINT:}"
+    bucket: "${STORAGE_BUCKET:file-translator}"
+    # Wymagany przez SDK do podpisania żądania także wtedy, gdy po drugiej stronie
+    # stoi MinIO, któremu region jest obojętny.
+    region: "${STORAGE_REGION:eu-central-1}"
+    # Poświadczenia podawane WPROST, nie domyślnym łańcuchem dostawców AWS: ten podłapałby
+    # ~/.aws/credentials z maszyny deweloperskiej i aplikacja pisałaby do cudzego kubełka,
+    # wyglądając przy tym na poprawnie działającą. Uzasadnienie: S3ClientConfig.
+    access-key: "${STORAGE_ACCESS_KEY:}"
+    secret-key: "${STORAGE_SECRET_KEY:}"
 
   # Konto administratora zakładane przy starcie. Bez niego rola ADMIN jest nieosiągalna,
   # a więc /actuator/metrics i /actuator/prometheus są martwe. Szczegóły: AdminBootstrap.

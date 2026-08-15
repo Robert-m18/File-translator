@@ -5,6 +5,7 @@
 package com.example.robert.translation;
 
 import com.example.robert.common.time.DbClock;
+import com.example.robert.translation.dto.TranslationContent;
 import com.example.robert.translation.dto.TranslationJobResponse;
 import com.example.robert.translation.dto.TranslationResultView;
 import com.example.robert.translation.exception.TranslationJobNotFoundException;
@@ -14,15 +15,19 @@ import com.example.robert.translation.model.TargetLanguage;
 import com.example.robert.translation.model.TranslationJob;
 import com.example.robert.translation.model.TranslationStatus;
 import com.example.robert.translation.repository.TranslationJobRepository;
+import com.example.robert.translation.storage.ObjectKeys;
+import com.example.robert.translation.storage.ObjectStore;
 import com.example.robert.user.model.User;
 import io.micrometer.core.instrument.MeterRegistry;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 
@@ -38,28 +43,77 @@ import java.time.Instant;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class TranslationService {
 
     private static final Duration QUOTA_WINDOW = Duration.ofDays(1);
 
+    /** Na razie jedyny obsługiwany format. Rozszerzenie wchodzi do klucza obiektu. */
+    private static final String TEXT_EXTENSION = ".txt";
+    private static final String TEXT_CONTENT_TYPE = "text/plain; charset=UTF-8";
+
     private final TranslationJobRepository repository;
     private final TranslationProperties properties;
+    private final ObjectStore objectStore;
     private final MeterRegistry meters;
+
+    /**
+     * Transakcja wołana programowo, bo metody publiczne tej klasy NIE są transakcyjne -
+     * rozmowa z magazynem obiektowym musi zostać poza transakcją, żeby nie trzymać
+     * połączenia z puli przez czas przesyłania pliku. Uzasadnienie przy submit.
+     */
+    private final TransactionTemplate transaction;
+
+    public TranslationService(TranslationJobRepository repository,
+                              TranslationProperties properties,
+                              ObjectStore objectStore,
+                              MeterRegistry meters,
+                              PlatformTransactionManager transactionManager) {
+        this.repository = repository;
+        this.properties = properties;
+        this.objectStore = objectStore;
+        this.meters = meters;
+        this.transaction = new TransactionTemplate(transactionManager);
+    }
 
     /**
      * Przyjmuje zlecenie i oddaje jego stan początkowy.
      *
-     * @Transactional obejmuje sprawdzenie limitu i zapis - inaczej dwa równoległe żądania
-     * tego samego użytkownika mogłyby oba zobaczyć wolny limit i oba się zmieścić. To nie
-     * jest pełna ochrona przed wyścigiem (do tego trzeba by blokady na wierszu użytkownika),
-     * ale przy limicie chroniącym budżet, a nie bezpieczeństwo, przekroczenie o jeden plik
-     * jest akceptowalne, a blokada na koncie użytkownika przy KAŻDYM zleceniu nie.
+     * CELOWO BEZ @Transactional NA METODZIE, w odróżnieniu od poprzedniej wersji. Wgranie
+     * pliku do magazynu obiektowego to rozmowa przez sieć, a transakcja obejmująca ją
+     * trzymałaby połączenie z puli przez cały ten czas - dokładnie ten sam błąd, którego
+     * unika AuthService.login (BCrypt) i OutboxPublisher (rozmowa z SMTP). Przy dużym pliku
+     * i wolnym magazynie kilka równoczesnych zleceń wysuszyłoby pulę na czekaniu na sieć.
+     *
+     * Transakcja obejmuje więc wyłącznie to, co musi być atomowe: sprawdzenie limitu i zapis
+     * wiersza. Przez TransactionTemplate, a nie przez @Transactional na metodzie prywatnej -
+     * wywołanie własnej metody omija proxy Springa, ta sama pułapka co w RefreshTokenService.
+     *
+     * KOLEJNOŚĆ: NAJPIERW OBIEKT, POTEM WIERSZ. Postgres i magazyn obiektowy nie mają
+     * wspólnej transakcji, więc jedno z dwojga może się nie udać - i cała decyzja polega
+     * na wybraniu, KTÓRA połówka ma zostać. Zostawiamy obiekt bez wiersza: to zajęte miejsce,
+     * które sprząta reguła wygasania na kubełku, i nikt tego nie zauważy. Odwrotnie
+     * zostawiałoby wiersz bez pliku, czyli zlecenie widoczne na liście, którego nie da się
+     * ani przetłumaczyć, ani pobrać, i które trzeba by wykrywać osobnym mechanizmem.
      */
-    @Transactional
     public TranslationJobResponse submit(User owner, UploadedTextFile file, TargetLanguage targetLang) {
-        Instant now = DbClock.now();
         String contentHash = file.contentHash();
+
+        // Klucz powstaje PRZED wierszem, więc jego segmentem jest UUID, a nie id zlecenia -
+        // uzasadnienie w ObjectKeys.
+        String jobPrefix = ObjectKeys.jobPrefix(owner.getId(), ObjectKeys.newStorageId());
+        String sourceKey = ObjectKeys.sourceKey(jobPrefix, TEXT_EXTENSION);
+
+        objectStore.put(sourceKey, file.content().getBytes(StandardCharsets.UTF_8), TEXT_CONTENT_TYPE);
+
+        return transaction.execute(status -> insertJob(owner, file, targetLang, contentHash, sourceKey));
+    }
+
+    private TranslationJobResponse insertJob(User owner,
+                                             UploadedTextFile file,
+                                             TargetLanguage targetLang,
+                                             String contentHash,
+                                             String sourceKey) {
+        Instant now = DbClock.now();
 
         /*
          * Dobowy limit znaków chroni KONTO U DOSTAWCY, a zlecenie, które zostanie zaspokojone
@@ -72,7 +126,10 @@ public class TranslationService {
          * pominięcie limitu czyta się jak przeoczenie, a nie jak decyzja.
          *
          * Sprawdzenie jest tanie: existsCached idzie po indeksie idx_translation_jobs_cache
-         * i NIE czyta treści wyniku. Samo kopiowanie wyniku dzieje się później, w workerze.
+         * i odpowiada wyłącznie "czy jest". Kopiowanie wyniku dzieje się później, w workerze.
+         *
+         * Odrzucenie na limicie zostawia wgrany przed chwilą obiekt bez wiersza. To jest
+         * przyjęta cena kolejności opisanej wyżej - osierocony plik wygasa sam.
          */
         boolean expectedCacheHit =
                 repository.existsCached(owner.getId(), contentHash, targetLang, properties.provider());
@@ -88,7 +145,8 @@ public class TranslationService {
          * komentarz przy findCachedFor - z tą różnicą, że tu rozjazd trwałby w danych.
          */
         TranslationJob job = repository.save(new TranslationJob(
-                owner, file.filename(), targetLang, file.content(), contentHash, now, expectedCacheHit));
+                owner, file.filename(), targetLang, sourceKey, contentHash,
+                file.content().length(), now, expectedCacheHit));
 
         // Zestawiony z translation.jobs.finished daje długość kolejki bez odpytywania bazy:
         // rozjazd między tymi dwoma licznikami to zlecenia, które utknęły.
@@ -128,29 +186,73 @@ public class TranslationService {
     }
 
     /**
-     * Wynik gotowy do pobrania.
+     * Otwiera wynik do pobrania: strumień z magazynu plus dane do nagłówków.
      *
-     * Rozróżnia trzy sytuacje, i to rozróżnienie jest całą wartością tej metody: nie ma
+     * Rozróżnia CZTERY sytuacje, i to rozróżnienie jest całą wartością tej metody: nie ma
      * takiego zlecenia (404), jest, ale nie jest gotowe (409 ze statusem, żeby front wiedział,
-     * czy dalej odpytywać), jest i gotowe.
+     * czy dalej odpytywać), jest gotowe, ale pliku już nie ma w magazynie (410), oraz jest
+     * i da się pobrać.
+     *
+     * Czwarty przypadek pojawił się razem z magazynem obiektowym i nie jest teoretyczny:
+     * wiersze kasuje retencja aplikacji, a obiekty - reguła wygasania na kubełku. Te dwie
+     * wartości nie są niczym związane poza uważnością, więc ich rozjazd MUSI mieć objaw
+     * inny niż 500. Patrz ObjectMissingException.
+     *
+     * Strumień otwieramy POZA transakcją: pobieranie pliku trwa tyle, ile trwa łącze klienta,
+     * a połączenie z bazą nie ma prawa być przez ten czas zajęte.
      */
-    @Transactional(readOnly = true)
-    public TranslationResultView getOwnResult(User owner, Long jobId) {
+    public TranslationContent openOwnResult(User owner, Long jobId) {
+        TranslationResultView view = readResultView(owner, jobId);
+        return new TranslationContent(
+                objectStore.open(view.resultObjectKey()),
+                view.originalFilename(),
+                view.targetLang());
+    }
+
+    /**
+     * Bez @Transactional i to jest świadome: adnotacja na metodzie wołanej z tej samej klasy
+     * omija proxy Springa, więc nie robiłaby NIC - a wyglądałaby, jakby coś robiła. To jedno
+     * zapytanie, które i tak leci we własnej transakcji repozytorium.
+     */
+    private TranslationResultView readResultView(User owner, Long jobId) {
         TranslationResultView view = repository.findResult(jobId, owner.getId())
                 .orElseThrow(TranslationJobNotFoundException::new);
 
-        if (view.status() != TranslationStatus.DONE || view.resultContent() == null) {
+        if (view.status() != TranslationStatus.DONE || view.resultObjectKey() == null) {
             throw new TranslationNotReadyException(view.status());
         }
         return view;
     }
 
-    @Transactional
+    /**
+     * Kasuje zlecenie razem z jego plikami.
+     *
+     * KOLEJNOŚĆ JEST ODWROTNA NIŻ PRZY TWORZENIU i to nie jest niekonsekwencja - to ten sam
+     * niezmiennik widziany z drugiej strony. Przy tworzeniu: najpierw obiekt, potem wiersz.
+     * Przy kasowaniu: najpierw wiersz, potem obiekt. W obu przypadkach stanem pośrednim,
+     * który może zostać po awarii, jest OBIEKT BEZ WIERSZA - nigdy wiersz bez obiektu.
+     * Pierwsze to zajęte miejsce, które wygasa samo; drugie to zlecenie, którego nie da się
+     * ani przetłumaczyć, ani pobrać.
+     *
+     * Klucz odczytujemy PRZED skasowaniem wiersza, bo potem nie ma już skąd wziąć prefiksu.
+     */
     public void deleteOwn(User owner, Long jobId) {
-        if (repository.deleteOwned(jobId, owner.getId()) == 0) {
+        String sourceKey = repository.findSourceKey(jobId, owner.getId())
+                .orElseThrow(TranslationJobNotFoundException::new);
+
+        Integer deleted = transaction.execute(status -> repository.deleteOwned(jobId, owner.getId()));
+        if (deleted == null || deleted == 0) {
+            // Zniknęło między odczytem klucza a kasowaniem - z punktu widzenia wołającego
+            // to ten sam przypadek co "nie ma takiego zlecenia".
             throw new TranslationJobNotFoundException();
         }
-        log.info("Usunięto zlecenie tłumaczenia (id={})", jobId);
+
+        // Po zatwierdzeniu, a nie w transakcji: gdyby kasowanie wiersza wycofało się po
+        // usunięciu plików, zostałoby zlecenie bez treści - czyli dokładnie ten stan,
+        // którego cały ten niezmiennik zabrania.
+        objectStore.deletePrefix(ObjectKeys.prefixOf(sourceKey));
+
+        log.info("Usunięto zlecenie tłumaczenia razem z plikami (id={})", jobId);
     }
 
     private TranslationJobResponse toResponse(TranslationJob job) {
