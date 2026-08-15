@@ -130,7 +130,14 @@ jobs:
           # Kubełek zakładany z osobna, tak jak robi to usługa minio-init w docker-compose.
           # Aplikacja go NIE tworzy: prawo do zakładania kubełków jest na produkcji
           # uprawnieniem administracyjnym i aplikacja nie ma powodu go mieć.
-          docker run --rm --network host minio/mc:latest sh -c "
+          #
+          # --entrypoint /bin/sh JEST OBOWIĄZKOWE i nie jest ostrożnością: obraz minio/mc ma
+          # ENTRYPOINT ustawiony na samo "mc", więc "docker run minio/mc sh -c ..." podaje
+          # słowo "sh" jako PODPOLECENIE mc, a nie jako powłokę. Kończy się to komunikatem
+          #   mc: <ERROR> `sh` is not a recognized command.
+          # czyli błędem wyglądającym na literówkę w składni mc, a nie na złe wywołanie
+          # dockera. docker-compose.yml robi to samo przez "entrypoint: /bin/sh -c".
+          docker run --rm --network host --entrypoint /bin/sh minio/mc:latest -c "
             mc alias set local http://127.0.0.1:9000 minioadmin minioadmin &&
             mc mb --ignore-existing local/file-translator"
 
