@@ -85,6 +85,31 @@ public class TranslationJob {
     private String resultObjectKey;
 
     /**
+     * Format pliku - rozpoznany po ZAWARTOŚCI przy wgrywaniu, nie po nazwie.
+     *
+     * Decyduje też o tym, którym API dostawcy tłumaczyć: tekst idzie zwykłym, PDF i XLSX
+     * dokumentowym. Uzasadnienie obu ścieżek: FileType.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "file_type", nullable = false, length = 10)
+    private FileType fileType = FileType.TXT;
+
+    /**
+     * Uchwyt do dokumentu wgranego u dostawcy - NULL dla zleceń tekstowych i dopóki dokument
+     * nie został wgrany.
+     *
+     * Zapisany, żeby rezerwacja, która wygasła w trakcie tłumaczenia, mogła WRÓCIĆ do
+     * odpytywania zamiast wgrywać dokument (i płacić za niego) drugi raz. Pełne uzasadnienie:
+     * DocumentHandle i changeset 0013.
+     */
+    @Column(name = "provider_document_id", length = 255)
+    private String providerDocumentId;
+
+    /** Sekret wystawiony przez dostawcę razem z identyfikatorem. NIE trafia do logów. */
+    @Column(name = "provider_document_key", length = 255)
+    private String providerDocumentKey;
+
+    /**
      * SHA-256 treści źródłowej, szesnastkowo - odcisk pod deduplikację.
      *
      * Nullable wyłącznie ze względu na wiersze sprzed changesetu 0008: skrótu nie da się
@@ -155,6 +180,7 @@ public class TranslationJob {
     public TranslationJob(User user,
                           String originalFilename,
                           TargetLanguage targetLang,
+                          FileType fileType,
                           String sourceObjectKey,
                           String contentHash,
                           int charCount,
@@ -163,6 +189,7 @@ public class TranslationJob {
         this.user = user;
         this.originalFilename = originalFilename;
         this.targetLang = targetLang;
+        this.fileType = fileType;
         this.sourceObjectKey = sourceObjectKey;
         this.contentHash = contentHash;
         // charCount podawany z zewnątrz, bo treści już tutaj nie ma - plik leży

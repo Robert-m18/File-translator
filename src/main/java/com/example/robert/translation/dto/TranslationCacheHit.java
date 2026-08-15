@@ -17,6 +17,11 @@ package com.example.robert.translation.dto;
  * sourceLang jedzie razem celowo. To dostawca go wykrył przy pierwszym tłumaczeniu, a treść
  * jest bajt w bajt ta sama, więc wykryłby dokładnie to samo. Pominięcie go zostawiłoby
  * zlecenie z cache'a bez języka źródłowego i różnica byłaby widoczna dla użytkownika na liście.
+ *
+ * charCount przenosi się razem z wynikiem, bo dla DOKUMENTU nie da się go policzyć u nas -
+ * liczbę znaków podaje dostawca dopiero po przetłumaczeniu. Zlecenie zaspokojone z cache'a
+ * nigdy nie trafia do dostawcy, więc bez przepisania tej wartości zostałoby z zerem
+ * i użytkownik widziałby "0 znaków" przy gotowym tłumaczeniu.
  */
-public record TranslationCacheHit(String resultObjectKey, String sourceLang) {
+public record TranslationCacheHit(String resultObjectKey, String sourceLang, int charCount) {
 }

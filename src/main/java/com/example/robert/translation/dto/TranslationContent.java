@@ -4,6 +4,7 @@
  */
 package com.example.robert.translation.dto;
 
+import com.example.robert.translation.model.FileType;
 import com.example.robert.translation.model.TargetLanguage;
 import com.example.robert.translation.storage.StoredObject;
 
@@ -21,5 +22,6 @@ import com.example.robert.translation.storage.StoredObject;
  */
 public record TranslationContent(StoredObject object,
                                  String originalFilename,
-                                 TargetLanguage targetLang) {
+                                 TargetLanguage targetLang,
+                                 FileType fileType) {
 }

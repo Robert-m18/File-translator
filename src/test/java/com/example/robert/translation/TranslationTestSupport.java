@@ -2,6 +2,7 @@ package com.example.robert.translation;
 
 import com.example.robert.common.security.TokenHasher;
 import com.example.robert.common.time.DbClock;
+import com.example.robert.translation.model.FileType;
 import com.example.robert.translation.model.TargetLanguage;
 import com.example.robert.translation.model.TranslationJob;
 import com.example.robert.translation.storage.ObjectKeys;
@@ -75,7 +76,7 @@ final class TranslationTestSupport {
                 ObjectKeys.jobPrefix(owner.getId(), ObjectKeys.newStorageId()), ".txt");
         objectStore.put(sourceKey, content.getBytes(StandardCharsets.UTF_8), "text/plain; charset=UTF-8");
 
-        return new TranslationJob(owner, filename, targetLang, sourceKey,
+        return new TranslationJob(owner, filename, targetLang, FileType.TXT, sourceKey,
                 TokenHasher.sha256Hex(content), content.length(), DbClock.now(), false);
     }
 

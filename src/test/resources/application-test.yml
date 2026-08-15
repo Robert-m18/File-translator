@@ -124,6 +124,8 @@ app:
     max-attempts: 2
     retry-backoff: 1s
     claim-timeout: 2m
+    # Krótko, żeby test wznawiania odpytywania nie czekał realnych sekund
+    document-poll-interval: 1s
     retention: 30d
     deepl:
       api-url: http://localhost/deepl-nieuzywany

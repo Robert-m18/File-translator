@@ -61,7 +61,8 @@ class DeepLTranslationProviderTest {
                 true,
                 TranslationProperties.Provider.DEEPL,
                 50_000, 5, 2, 3,
-                Duration.ofSeconds(10), Duration.ofMinutes(2), Duration.ofDays(30),
+                Duration.ofSeconds(10), Duration.ofMinutes(2),
+                Duration.ofSeconds(5), Duration.ofDays(30),
                 new TranslationProperties.DeepL(BASE_URL, apiKey,
                         Duration.ofSeconds(5), Duration.ofSeconds(30)));
     }

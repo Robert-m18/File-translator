@@ -114,7 +114,10 @@ public interface TranslationJobRepository extends JpaRepository<TranslationJob, 
                 j.sourceLang = :sourceLang,
                 j.provider = :provider,
                 j.billedChars = :billedChars,
+                j.charCount = :charCount,
                 j.completedAt = :now,
+                j.providerDocumentId = null,
+                j.providerDocumentKey = null,
                 j.lastError = null
             where j.id = :id
             """)
@@ -123,7 +126,54 @@ public interface TranslationJobRepository extends JpaRepository<TranslationJob, 
                  @Param("sourceLang") String sourceLang,
                  @Param("provider") TranslationProperties.Provider provider,
                  @Param("billedChars") int billedChars,
+                 @Param("charCount") int charCount,
                  @Param("now") Instant now);
+
+    /**
+     * Zapamiętuje uchwyt do dokumentu wgranego u dostawcy.
+     *
+     * WŁASNA, NATYCHMIASTOWA transakcja u wołającego jest tu warunkiem sensu: uchwyt musi
+     * zostać zatwierdzony ZARAZ po wgraniu, bo od tej chwili dokument jest już opłacony.
+     * Zapis dopiero razem z wynikiem oznaczałby, że proces padający w trakcie tłumaczenia
+     * traci opłacony dokument i wgrywa go od nowa.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            update TranslationJob j
+            set j.providerDocumentId = :documentId, j.providerDocumentKey = :documentKey
+            where j.id = :id
+            """)
+    int saveDocumentHandle(@Param("id") Long id,
+                           @Param("documentId") String documentId,
+                           @Param("documentKey") String documentKey);
+
+    /** Zapomina uchwyt - dokumentu nie ma już u dostawcy, więc kolejne podejście wgra go od nowa. */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            update TranslationJob j
+            set j.providerDocumentId = null, j.providerDocumentKey = null
+            where j.id = :id
+            """)
+    int clearDocumentHandle(@Param("id") Long id);
+
+    /**
+     * Odkłada zlecenie do NASTĘPNEGO odpytania dostawcy, nie licząc tego jako podejścia.
+     *
+     * ODEJMOWANIE attempts NIE JEST SZTUCZKĄ, tylko przywróceniem znaczenia tej kolumny.
+     * Rezerwacja (claim) podbija licznik przy każdym wzięciu zlecenia, bo w normalnym trybie
+     * wzięcie = próba przetłumaczenia. Przy dokumencie wzięcie bywa wyłącznie sprawdzeniem
+     * "czy już gotowe", a dostawca może tłumaczyć dłużej niż max-attempts takich sprawdzeń.
+     * Bez tego odjęcia dokument tłumaczony trzy minuty zostałby PORZUCONY jako nieudany,
+     * mimo że po drugiej stronie wszystko szło dobrze - a licznik przestałby znaczyć
+     * "nieudane próby" i zaczął znaczyć "ile razy zajrzeliśmy".
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            update TranslationJob j
+            set j.attempts = j.attempts - 1, j.nextAttemptAt = :nextAttemptAt
+            where j.id = :id
+            """)
+    int markPolling(@Param("id") Long id, @Param("nextAttemptAt") Instant nextAttemptAt);
 
     /** Porażka, ale próbujemy dalej - wiersz wraca do PENDING z odsuniętym next_attempt_at. */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
@@ -199,7 +249,7 @@ public interface TranslationJobRepository extends JpaRepository<TranslationJob, 
     /** Wskazanie na wynik: klucz obiektu plus dane do nagłówka pobierania. */
     @Query("""
             select new com.example.robert.translation.dto.TranslationResultView(
-                j.status, j.originalFilename, j.targetLang, j.resultObjectKey)
+                j.status, j.originalFilename, j.targetLang, j.fileType, j.resultObjectKey)
             from TranslationJob j
             where j.id = :id and j.user.id = :userId
             """)
@@ -292,7 +342,7 @@ public interface TranslationJobRepository extends JpaRepository<TranslationJob, 
      */
     @Query("""
             select new com.example.robert.translation.dto.TranslationCacheHit(
-                done.resultObjectKey, done.sourceLang)
+                done.resultObjectKey, done.sourceLang, done.charCount)
             from TranslationJob job
             join TranslationJob done
               on done.user.id = job.user.id

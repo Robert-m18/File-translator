@@ -1,5 +1,6 @@
 package com.example.robert.translation;
 
+import com.example.robert.translation.model.FileType;
 import com.example.robert.translation.model.TargetLanguage;
 import com.example.robert.translation.model.TranslationJob;
 import com.example.robert.translation.repository.TranslationJobRepository;
@@ -13,6 +14,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
 import org.springframework.transaction.PlatformTransactionManager;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -77,12 +79,15 @@ class TranslationServiceStorageTest {
                 3,
                 Duration.ofSeconds(1),
                 Duration.ofMinutes(2),
+                Duration.ofSeconds(1),
                 Duration.ofDays(30),
                 new TranslationProperties.DeepL("http://localhost", "", Duration.ofSeconds(1), Duration.ofSeconds(2)));
     }
 
     private void submit() {
-        service.submit(owner, new UploadedTextFile("lista.txt", CONTENT), TargetLanguage.EN_GB);
+        service.submit(owner,
+                new UploadedFile("lista.txt", FileType.TXT, CONTENT.getBytes(StandardCharsets.UTF_8)),
+                TargetLanguage.EN_GB);
     }
 
     /**

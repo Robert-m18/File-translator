@@ -65,6 +65,16 @@ public record TranslationProperties(
         @NotNull Duration claimTimeout,
 
         /**
+         * Co ile pytać dostawcę, czy dokument jest już przetłumaczony.
+         *
+         * Osobno od poll-interval kolejki: tamten mówi, jak często zaglądać do WŁASNEJ bazy
+         * (tanie), ten - jak często pytać CUDZE API (liczy się do limitu żądań dostawcy).
+         * Za krótki zamienia jeden dokument w serię żądań, za długi dokłada zwłokę do czasu,
+         * który użytkownik i tak spędza patrząc na ekran.
+         */
+        @NotNull Duration documentPollInterval,
+
+        /**
          * Jak długo trzymamy zlecenia, licząc od chwili utworzenia.
          *
          * Chodzi o treść, nie o rozmiar tabeli: w source_content i result_content leżą PLIKI

@@ -8,15 +8,19 @@ import com.example.robert.translation.TranslationProperties;
 import com.example.robert.translation.model.TargetLanguage;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
+import org.springframework.util.LinkedMultiValueMap;
+import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
 import java.util.List;
 import java.util.Map;
+import java.util.function.Supplier;
 
 /**
  * Tłumaczenie przez DeepL API.
@@ -121,6 +125,103 @@ public class DeepLTranslationProvider implements TranslationProvider {
         return new TranslationResult(translation.text(), translation.detectedSourceLanguage());
     }
 
+    /* ---------------------------------------------------------------------------------
+     * Dokumenty: POST /v2/document (wgranie) -> POST /v2/document/{id} (status)
+     * -> POST /v2/document/{id}/result (pobranie). Wszystkie trzy metodą POST, tak jak
+     * opisuje dokumentacja DeepL - także sprawdzenie statusu, mimo że nic nie zmienia.
+     * --------------------------------------------------------------------------------- */
+
+    @Override
+    public DocumentHandle uploadDocument(byte[] content, String filename, TargetLanguage target) {
+        MultiValueMap<String, Object> form = new LinkedMultiValueMap<>();
+        // Nazwa pliku jedzie w części multiparta, bo to PO NIEJ dostawca rozpoznaje format -
+        // bez niej odrzuca żądanie, nie wiedząc, czy dostał PDF-a, czy arkusz.
+        form.add("file", new NamedByteArrayResource(content, filename));
+        form.add("target_lang", target.apiCode());
+
+        DocumentUpload upload = call(() -> restClient.post()
+                .uri("/document")
+                .contentType(MediaType.MULTIPART_FORM_DATA)
+                .body(form)
+                .retrieve()
+                .onStatus(HttpStatusCode::isError, (request, response) -> {
+                    throw mapError(response.getStatusCode());
+                })
+                .body(DocumentUpload.class));
+
+        if (upload == null || upload.document_id() == null || upload.document_key() == null) {
+            throw new TranslationProviderException("TRANSLATION_PROVIDER_REJECTED", false,
+                    "Dostawca przyjął dokument, ale nie zwrócił uchwytu do niego");
+        }
+        return new DocumentHandle(upload.document_id(), upload.document_key());
+    }
+
+    @Override
+    public DocumentStatus checkDocument(DocumentHandle handle) {
+        DocumentStatusResponse response = call(() -> restClient.post()
+                .uri("/document/{id}", handle.documentId())
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("document_key", handle.documentKey()))
+                .retrieve()
+                .onStatus(HttpStatusCode::isError, (request, httpResponse) -> {
+                    // 404 przy sprawdzaniu statusu znaczy, że dokumentu już nie ma - został
+                    // pobrany albo wygasł. To nie jest awaria, tylko sygnał "zacznij od nowa".
+                    if (httpResponse.getStatusCode().value() == 404) {
+                        throw new DocumentUnavailableException("Dokument nie istnieje u dostawcy");
+                    }
+                    throw mapError(httpResponse.getStatusCode());
+                })
+                .body(DocumentStatusResponse.class));
+
+        if (response == null || response.status() == null) {
+            throw new TranslationProviderException("TRANSLATION_PROVIDER_REJECTED", false,
+                    "Dostawca nie zwrócił statusu dokumentu");
+        }
+        return response.toStatus();
+    }
+
+    @Override
+    public byte[] downloadDocument(DocumentHandle handle) {
+        return call(() -> restClient.post()
+                .uri("/document/{id}/result", handle.documentId())
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("document_key", handle.documentKey()))
+                .retrieve()
+                .onStatus(HttpStatusCode::isError, (request, response) -> {
+                    /*
+                     * 503 przy pobieraniu ma u DeepL DWA znaczenia naraz: "jeszcze się tłumaczy"
+                     * ORAZ "już pobrany, więc skasowany". Rozróżnić ich z samej odpowiedzi nie
+                     * sposób, ale wołający i tak schodzi tu dopiero po statusie DONE, więc
+                     * pierwsze znaczenie odpada - zostaje drugie. 404 to ten sam przypadek.
+                     */
+                    int code = response.getStatusCode().value();
+                    if (code == 404 || code == 503) {
+                        throw new DocumentUnavailableException(
+                                "Przetłumaczonego dokumentu nie ma już u dostawcy - da się go pobrać tylko raz");
+                    }
+                    throw mapError(response.getStatusCode());
+                })
+                .body(byte[].class));
+    }
+
+    /**
+     * Wspólna obsługa awarii transportu dla wszystkich wywołań - identyczna jak w translate.
+     * Wydzielona, bo powtórzona cztery razy rozjechałaby się przy pierwszej poprawce.
+     */
+    private <T> T call(Supplier<T> request) {
+        try {
+            return request.get();
+        } catch (ResourceAccessException e) {
+            throw new TranslationProviderException("TRANSLATION_PROVIDER_UNAVAILABLE", true,
+                    "Dostawca tłumaczenia nie odpowiedział", e);
+        } catch (TranslationProviderException e) {
+            throw e;
+        } catch (RestClientException e) {
+            throw new TranslationProviderException("TRANSLATION_PROVIDER_UNAVAILABLE", true,
+                    "Nieoczekiwana odpowiedź dostawcy tłumaczenia", e);
+        }
+    }
+
     private TranslationProviderException mapError(HttpStatusCode status) {
         int code = status.value();
 
@@ -162,6 +263,56 @@ public class DeepLTranslationProvider implements TranslationProvider {
         /** Nazwa w JSON-ie jest z podkreśleniami; ta metoda daje czytelną nazwę w kodzie. */
         String detectedSourceLanguage() {
             return detected_source_language;
+        }
+    }
+
+    /** Odpowiedź na wgranie dokumentu. */
+    record DocumentUpload(String document_id, String document_key) {
+    }
+
+    /**
+     * Odpowiedź na sprawdzenie statusu. seconds_remaining świadomie pomijamy: worker odpytuje
+     * w stałym rytmie i nie ma co zrobić z prognozą dostawcy poza wpisaniem jej do logu.
+     */
+    record DocumentStatusResponse(String status, Integer billed_characters, String error_message) {
+
+        DocumentStatus toStatus() {
+            DocumentStatus.State state = switch (status) {
+                case "queued" -> DocumentStatus.State.QUEUED;
+                case "translating" -> DocumentStatus.State.TRANSLATING;
+                case "done" -> DocumentStatus.State.DONE;
+                case "error" -> DocumentStatus.State.ERROR;
+                // Nieznany status traktujemy jak błąd, a nie jak "jeszcze trwa": odpytywanie
+                // w nieskończoność o stan, którego nie rozumiemy, zamieniłoby rozjazd kontraktu
+                // w zlecenie wiszące na zawsze.
+                default -> DocumentStatus.State.ERROR;
+            };
+            String message = state == DocumentStatus.State.ERROR && error_message == null
+                    ? "Dostawca zwrócił nieznany status dokumentu: " + status
+                    : error_message;
+            return new DocumentStatus(state, billed_characters, message);
+        }
+    }
+
+    /**
+     * Zasób z JAWNĄ nazwą pliku.
+     *
+     * ByteArrayResource domyślnie nie ma nazwy, więc Spring buduje część multiparta bez
+     * filename - a DeepL rozpoznaje format właśnie po nim i odrzuca takie żądanie. Objaw jest
+     * mylący: błąd wygląda na problem z zawartością dokumentu, a nie z nagłówkiem części.
+     */
+    static class NamedByteArrayResource extends ByteArrayResource {
+
+        private final String filename;
+
+        NamedByteArrayResource(byte[] content, String filename) {
+            super(content);
+            this.filename = filename;
+        }
+
+        @Override
+        public String getFilename() {
+            return filename;
         }
     }
 }

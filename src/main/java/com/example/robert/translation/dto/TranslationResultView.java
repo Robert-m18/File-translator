@@ -4,6 +4,7 @@
  */
 package com.example.robert.translation.dto;
 
+import com.example.robert.translation.model.FileType;
 import com.example.robert.translation.model.TargetLanguage;
 import com.example.robert.translation.model.TranslationStatus;
 
@@ -21,6 +22,7 @@ public record TranslationResultView(
         TranslationStatus status,
         String originalFilename,
         TargetLanguage targetLang,
+        FileType fileType,
         String resultObjectKey
 ) {
 }

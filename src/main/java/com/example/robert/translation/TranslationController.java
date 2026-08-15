@@ -70,7 +70,7 @@ public class TranslationController {
             @RequestParam("targetLang") TargetLanguage targetLang,
             @AuthenticationPrincipal User user) {
 
-        UploadedTextFile uploaded = UploadedTextFile.from(file);
+        UploadedFile uploaded = UploadedFile.from(file);
         TranslationJobResponse response = translationService.submit(user, uploaded, targetLang);
 
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(response);
@@ -124,7 +124,10 @@ public class TranslationController {
 
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_DISPOSITION, disposition.toString())
-                .contentType(new MediaType(MediaType.TEXT_PLAIN, StandardCharsets.UTF_8))
+                // Typ treści z ROZPOZNANEGO formatu, nie na sztywno text/plain: przeglądarka
+                // po nim decyduje, co zrobić z plikiem, a PDF podany jako tekst otwiera się
+                // w karcie jako krzaki zamiast trafić do czytnika.
+                .contentType(MediaType.parseMediaType(content.fileType().contentType()))
                 // Content-Length znany z metadanych obiektu - bez niego odpowiedź leci
                 // kodowaniem porcjowym i przeglądarka nie pokazuje postępu pobierania.
                 .contentLength(content.object().size())
@@ -138,12 +141,16 @@ public class TranslationController {
         return ResponseEntity.noContent().build();
     }
 
-    /** "lista.txt" + EN-GB -> "lista-EN-GB.txt". Rozszerzenie zostaje na końcu, gdzie ma być. */
+    /**
+     * "lista.txt" + EN-GB -> "lista-EN-GB.txt". Rozszerzenie zostaje na końcu, gdzie ma być,
+     * i bierze się z ROZPOZNANEGO formatu - nie z nazwy przysłanej przez klienta.
+     */
     private String translatedFilename(TranslationContent content) {
+        String extension = content.fileType().extension();
         String original = content.originalFilename();
-        int dot = original.toLowerCase(Locale.ROOT).lastIndexOf(".txt");
+        int dot = original.toLowerCase(Locale.ROOT).lastIndexOf(extension);
         String base = dot > 0 ? original.substring(0, dot) : original;
-        return base + "-" + content.targetLang().apiCode() + ".txt";
+        return base + "-" + content.targetLang().apiCode() + extension;
     }
 
     private Pageable capped(Pageable pageable) {

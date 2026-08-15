@@ -47,10 +47,6 @@ public class TranslationService {
 
     private static final Duration QUOTA_WINDOW = Duration.ofDays(1);
 
-    /** Na razie jedyny obsługiwany format. Rozszerzenie wchodzi do klucza obiektu. */
-    private static final String TEXT_EXTENSION = ".txt";
-    private static final String TEXT_CONTENT_TYPE = "text/plain; charset=UTF-8";
-
     private final TranslationJobRepository repository;
     private final TranslationProperties properties;
     private final ObjectStore objectStore;
@@ -95,21 +91,22 @@ public class TranslationService {
      * zostawiałoby wiersz bez pliku, czyli zlecenie widoczne na liście, którego nie da się
      * ani przetłumaczyć, ani pobrać, i które trzeba by wykrywać osobnym mechanizmem.
      */
-    public TranslationJobResponse submit(User owner, UploadedTextFile file, TargetLanguage targetLang) {
+    public TranslationJobResponse submit(User owner, UploadedFile file, TargetLanguage targetLang) {
         String contentHash = file.contentHash();
 
         // Klucz powstaje PRZED wierszem, więc jego segmentem jest UUID, a nie id zlecenia -
-        // uzasadnienie w ObjectKeys.
+        // uzasadnienie w ObjectKeys. Rozszerzenie bierze się z ROZPOZNANEGO typu, nie z nazwy
+        // przysłanej przez klienta.
         String jobPrefix = ObjectKeys.jobPrefix(owner.getId(), ObjectKeys.newStorageId());
-        String sourceKey = ObjectKeys.sourceKey(jobPrefix, TEXT_EXTENSION);
+        String sourceKey = ObjectKeys.sourceKey(jobPrefix, file.type().extension());
 
-        objectStore.put(sourceKey, file.content().getBytes(StandardCharsets.UTF_8), TEXT_CONTENT_TYPE);
+        objectStore.put(sourceKey, file.content(), file.type().contentType());
 
         return transaction.execute(status -> insertJob(owner, file, targetLang, contentHash, sourceKey));
     }
 
     private TranslationJobResponse insertJob(User owner,
-                                             UploadedTextFile file,
+                                             UploadedFile file,
                                              TargetLanguage targetLang,
                                              String contentHash,
                                              String sourceKey) {
@@ -134,8 +131,16 @@ public class TranslationService {
         boolean expectedCacheHit =
                 repository.existsCached(owner.getId(), contentHash, targetLang, properties.provider());
 
+        /*
+         * Dla DOKUMENTU charCount() daje 0, więc sprawdzenie limitu sprowadza się do pytania
+         * "czy budżet jest już wyczerpany", a nie "czy zmieści się ten plik" - liczby znaków
+         * w PDF-ie nie da się poznać przed wysłaniem go do dostawcy. Konsekwencja przyjęta
+         * świadomie: jeden dokument może przekroczyć dobowy limit, bo naliczy się dopiero
+         * po fakcie (billedChars z odpowiedzi dostawcy). Szkodę ogranicza limit rozmiaru
+         * per format - uzasadnienie w FileType.
+         */
         if (!expectedCacheHit) {
-            enforceDailyQuota(owner, file.content().length(), now);
+            enforceDailyQuota(owner, file.charCount(), now);
         }
 
         /*
@@ -145,8 +150,8 @@ public class TranslationService {
          * komentarz przy findCachedFor - z tą różnicą, że tu rozjazd trwałby w danych.
          */
         TranslationJob job = repository.save(new TranslationJob(
-                owner, file.filename(), targetLang, sourceKey, contentHash,
-                file.content().length(), now, expectedCacheHit));
+                owner, file.filename(), targetLang, file.type(), sourceKey, contentHash,
+                file.charCount(), now, expectedCacheHit));
 
         // Zestawiony z translation.jobs.finished daje długość kolejki bez odpytywania bazy:
         // rozjazd między tymi dwoma licznikami to zlecenia, które utknęły.
@@ -206,7 +211,8 @@ public class TranslationService {
         return new TranslationContent(
                 objectStore.open(view.resultObjectKey()),
                 view.originalFilename(),
-                view.targetLang());
+                view.targetLang(),
+                view.fileType());
     }
 
     /**

@@ -30,4 +30,40 @@ public interface TranslationProvider {
      * @throws TranslationProviderException gdy dostawca odmówił albo nie odpowiedział
      */
     TranslationResult translate(String text, TargetLanguage target);
+
+    /* ---------------------------------------------------------------------------------
+     * Dokumenty (PDF, XLSX) - osobna, TRZYSTOPNIOWA ścieżka.
+     *
+     * DLACZEGO NIE JEDNA METODA translateDocument(bajty) BLOKUJĄCA DO SKUTKU: tłumaczenie
+     * dokumentu po stronie dostawcy jest asynchroniczne i potrafi trwać dłużej niż okno
+     * rezerwacji zlecenia. Metoda blokująca oznaczałaby albo wątek roboczy zajęty przez cały
+     * ten czas, albo - po wygaśnięciu rezerwacji - wgranie tego samego dokumentu drugi raz
+     * i zapłacenie za nie drugi raz. Rozbicie na trzy kroki pozwala zapisać uchwyt w wierszu
+     * zlecenia i WRÓCIĆ do odpytywania przy następnej rezerwacji.
+     *
+     * Ceną jest to, że kształt protokołu dostawcy widać w porcie. Przyjęte świadomie:
+     * alternatywą jest płacenie dwa razy za wolno tłumaczące się dokumenty.
+     * --------------------------------------------------------------------------------- */
+
+    /**
+     * Wgrywa dokument i oddaje uchwyt do niego. NIE czeka na tłumaczenie.
+     *
+     * @param filename nazwa pliku - dostawca rozpoznaje po niej format, więc rozszerzenie
+     *                 musi się zgadzać z zawartością
+     */
+    DocumentHandle uploadDocument(byte[] content, String filename, TargetLanguage target);
+
+    /** Stan tłumaczenia. Wołane tyle razy, ile trzeba - nie zmienia niczego po stronie dostawcy. */
+    DocumentStatus checkDocument(DocumentHandle handle);
+
+    /**
+     * Pobiera przetłumaczony dokument.
+     *
+     * UWAGA, POBRAĆ MOŻNA TYLKO RAZ - dostawca kasuje dokument po pobraniu. Wołający musi
+     * więc zapisać wynik trwale, ZANIM uzna zlecenie za zakończone.
+     *
+     * @throws DocumentUnavailableException gdy dokumentu już nie ma (pobrany wcześniej albo
+     *                                      wygasł u dostawcy) - trzeba wgrać go od nowa
+     */
+    byte[] downloadDocument(DocumentHandle handle);
 }

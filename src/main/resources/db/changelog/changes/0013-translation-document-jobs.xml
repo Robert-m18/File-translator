@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="0013-01-translation-document-jobs" author="robert">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <columnExists tableName="translation_jobs" columnName="file_type"/>
+            </not>
+        </preConditions>
+
+        <!--
+            Format pliku. Decyduje o TRZECH rzeczach naraz: o rozszerzeniu klucza w magazynie,
+            o typie treści przy pobieraniu i o tym, KTÓRYM API dostawcy tłumaczyć - tekstowym
+            czy dokumentowym.
+
+            Rozpoznawany po ZAWARTOŚCI przy wgrywaniu (FileType.detect), a nie po rozszerzeniu
+            nazwy, bo nazwę ustawia klient. Zapisany, a nie wyliczany z klucza obiektu przy
+            każdym odczycie: rozszerzenie w kluczu jest skutkiem tej decyzji, a nie jej źródłem,
+            i wyprowadzanie typu z powrotem z nazwy pliku odtwarzałoby dokładnie to zaufanie
+            do tekstu, którego przy wgrywaniu unikamy.
+        -->
+        <addColumn tableName="translation_jobs">
+            <column name="file_type" type="VARCHAR(10)"/>
+        </addColumn>
+
+        <!-- Wiersze sprzed tej zmiany mogły być wyłącznie plikami tekstowymi. -->
+        <update tableName="translation_jobs">
+            <column name="file_type" value="TXT"/>
+        </update>
+
+        <addNotNullConstraint tableName="translation_jobs"
+                              columnName="file_type"
+                              columnDataType="VARCHAR(10)"/>
+
+        <!--
+            UCHWYT DO DOKUMENTU WGRANEGO U DOSTAWCY - i to jest cała treść tego changesetu.
+
+            Tłumaczenie dokumentu jest po stronie dostawcy ASYNCHRONICZNE i potrafi trwać
+            dłużej niż okno rezerwacji zlecenia (app.translation.claim-timeout, 2 minuty).
+            Bez zapisanego uchwytu kolejna rezerwacja wgrałaby ten sam dokument DRUGI RAZ
+            i zapłaciła za niego drugi raz - u dostawcy płaci się za znaki, więc byłby to
+            realny rachunek, a nie tylko zmarnowany czas. Z uchwytem worker wraca do
+            odpytywania tam, gdzie poprzednie podejście skończyło.
+
+            NULL dla zleceń tekstowych i dla dokumentów jeszcze niewgranych. Czyszczone,
+            gdy dokument przestaje istnieć u dostawcy - wtedy trzeba zacząć od nowa
+            (DeepL pozwala pobrać dokument tylko RAZ i kasuje go zaraz potem).
+
+            provider_document_key to SEKRET wystawiony przez dostawcę: bez niego nie da się
+            ani sprawdzić statusu, ani pobrać wyniku. Nie trafia do logów, tak samo jak
+            klucz API.
+        -->
+        <addColumn tableName="translation_jobs">
+            <column name="provider_document_id" type="VARCHAR(255)"/>
+        </addColumn>
+        <addColumn tableName="translation_jobs">
+            <column name="provider_document_key" type="VARCHAR(255)"/>
+        </addColumn>
+    </changeSet>
+
+</databaseChangeLog>

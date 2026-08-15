@@ -39,15 +39,21 @@ spring:
   servlet:
     multipart:
       # Twardy limit wgrywanego pliku, egzekwowany ZANIM plik wjedzie w całości do pamięci.
-      # 256 KB nie jest liczbą z powietrza: darmowy próg DeepL to 500 tys. znaków
-      # miesięcznie na całe konto, więc plik o rozmiarze 1 MB (czyli do miliona znaków)
-      # wyczerpywałby go dwukrotnie jednym żądaniem. Realnym ogranicznikiem dla użytkownika
-      # jest i tak app.translation.daily-char-limit - to tutaj odcina tylko to, co nie ma
-      # prawa trafić do pamięci procesu.
-      max-file-size: 256KB
+      #
+      # To jest SUFIT DLA WSZYSTKICH FORMATÓW, więc musi przepuścić największy z nich (PDF
+      # i XLSX po 2 MB) - i właśnie dlatego NIE jest jedynym limitem. Właściwy limit jest
+      # per format i siedzi w FileType, bo dla tekstu wyprowadza się go z ekonomii dostawcy
+      # (bajty to praktycznie znaki, darmowy próg DeepL to 500 tys. znaków miesięcznie na
+      # całe konto), a dla binariów z chęci ograniczenia szkody z jednego pliku. Bez tego
+      # rozdzielenia plik .txt o rozmiarze dopuszczalnym dla PDF-a przeszedłby tędy
+      # i wyjadłby miesięczny budżet konta jednym żądaniem.
+      #
+      # Tutaj odcinamy tylko to, co nie ma prawa trafić do pamięci procesu; odpowiedzią jest
+      # 413 FILE_TOO_LARGE, a limit formatu daje czytelniejsze 400 FILE_TOO_LARGE_FOR_TYPE.
+      max-file-size: 2MB
       # Nieco więcej niż plik: w żądaniu multipart jadą jeszcze nagłówki części i pole
       # targetLang. Bez zapasu poprawny plik o maksymalnym rozmiarze byłby odrzucany.
-      max-request-size: 512KB
+      max-request-size: 3MB
 
 server:
   port: "${SERVER_PORT:2009}"
@@ -128,6 +134,9 @@ app:
     # Musi być wyraźnie dłuższe niż realny czas odpowiedzi dostawcy, inaczej druga instancja
     # zabierze zlecenie, gdy pierwsza jeszcze czeka.
     claim-timeout: 2m
+    # Co ile pytać dostawcę o gotowość DOKUMENTU (PDF/XLSX). Osobno od poll-interval wyżej:
+    # tamto jest zaglądaniem do własnej bazy, to jest żądaniem do cudzego API.
+    document-poll-interval: 5s
     # W magazynie obiektowym leżą PLIKI UŻYTKOWNIKA - to jest powód retencji, nie rozmiar
     # tabeli. Użytkownik może skasować zlecenie sam; to jest to, co dzieje się, gdy tego
     # nie zrobi. UWAGA: druga połowa retencji to reguła wygasania na kubełku (docker-compose),
