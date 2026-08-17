@@ -23,7 +23,7 @@ administracyjnego ani zarządzania użytkownikami nie ma (patrz sekcja Endpointy
 | Obserwowalność | Spring Boot Actuator, Micrometer + Prometheus |
 | Ochrona przed nadużyciami | bucket4j (token bucket), Caffeine lub Redis |
 | Poczta | Spring Mail + Thymeleaf, transakcyjna skrzynka nadawcza (outbox) |
-| Testy | JUnit 5, Mockito, MockMvc, H2, JaCoCo |
+| Testy | JUnit 5, Mockito, MockMvc, Testcontainers (H2 jako wariant `-Ph2`), JaCoCo |
 
 ---
 
@@ -66,17 +66,24 @@ i **nie** modyfikuje schematu.
 ### Testy
 
 ```bash
-./mvnw test                    # wszystkie testy
+./mvnw test                    # wszystkie testy (PostgreSQL, Redis i MinIO w kontenerach)
 ./mvnw verify                  # testy + raport pokrycia (target/site/jacoco/index.html)
+./mvnw test -Ph2               # szybka pętla na H2, bez Dockera
 ./mvnw test -Dtest=AuthServiceTest
 ./mvnw test -Dtest=AuthServiceTest#login_shouldReturnTokenPair
 ```
 
-Testy działają na H2 w pamięci (tryb zgodności `MODE=PostgreSQL`) — działająca baza nie
-jest potrzebna. Schemat budują te same migracje Liquibase co na produkcji, więc `mvn test`
-wykrywa rozjazd encji z migracjami. Job `integration` w CI powtarza cały zestaw na
-prawdziwym PostgreSQL-u i Redisie — tryb zgodności H2 nie odwzorowuje wiernie ani składni
-`FOR NO KEY UPDATE ... SKIP LOCKED`, ani zachowania migracji.
+Domyślny przebieg wymaga **działającego Dockera**: `TestInfrastructure` podnosi
+przez Testcontainers PostgreSQL-a, Redisa i MinIO — te same obrazy co w `docker-compose.yml`
+— raz na cały przebieg i wskazuje na nie konfigurację. Schemat budują te same migracje
+Liquibase co na produkcji (Hibernate w trybie `validate`), więc `mvn test` wykrywa rozjazd
+encji z migracjami *na docelowym silniku*, a nie na jego namiastce.
+
+`-Ph2` zostawia stary wariant — H2 w pamięci w trybie zgodności `MODE=PostgreSQL` — na
+szybkie pętle bez Dockera. **Zielone `-Ph2` nie jest obietnicą zielonego CI**: H2 nie
+odwzorowuje wiernie ani składni `FOR NO KEY UPDATE ... SKIP LOCKED`, ani zachowania
+migracji, a `RedisBucketProvider` i `S3ObjectStore` w ogóle się na nim nie wykonują.
+`TestInfrastructureTest` pilnuje, żeby wariant nie zamienił się po cichu w ten drugi.
 
 ---
 
@@ -391,6 +398,6 @@ który został już gdziekolwiek wykonany.
 | 4 | Rozszerzenie modelu użytkownika (dostawcy tożsamości) | ⏳ |
 | 5 | Logowanie kodem jednorazowym / magic link | ⏳ |
 | 6 | Logowanie przez Google (OAuth2) | ⏳ |
-| 7 | Testy integracyjne na Testcontainers | ⏳ |
+| 7 | Testy integracyjne na Testcontainers | ✅ |
 | 8 | Translator plików — MVP (upload `.txt`, kolejka zadań, tłumaczenie, pobranie, mail) | ✅ |
 | 9 | Translator v2 (PDF/XLSX, SSE zamiast odpytywania, cache tłumaczeń) | ⏳ |

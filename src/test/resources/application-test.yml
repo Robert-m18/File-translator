@@ -1,4 +1,11 @@
-# Profil testowy - H2 w pamięci, bez potrzeby stawiania PostgreSQL-a.
+# Profil testowy.
+#
+# UWAGA NA KOLEJNOŚĆ CZYTANIA TEGO PLIKU: domyślny przebieg testów NIE chodzi na H2.
+# TestInfrastructure podnosi PostgreSQL-a, Redisa i MinIO w kontenerach (Testcontainers)
+# i nadpisuje stąd datasource, magazyn limitów i magazyn plików WŁAŚCIWOŚCIAMI SYSTEMOWYMI,
+# które stoją w kolejności pierwszeństwa Springa wyżej niż ten plik. Wartości poniżej są
+# więc dwiema rzeczami naraz: konfiguracją wspólną dla obu wariantów (wszystko poza tymi
+# trzema) oraz konfiguracją wariantu H2, który włącza się profilem `./mvnw test -Ph2`.
 #
 # Świadomie NIE używamy tu ddl-auto: create-drop. Schemat budują te same migracje
 # Liquibase co na produkcji, a Hibernate je potem weryfikuje (ddl-auto: validate).
@@ -20,21 +27,24 @@ spring:
     # (baza żyje dłużej niż kontekst przez DB_CLOSE_DELAY=-1) - sprawdzone przy tej
     # migracji, padał CsrfLifecycleTest.
     #
-    # To nadal jest H2 udające PostgreSQL, więc job "integration" w CI zostaje jedynym
-    # miejscem, gdzie migracje i SKIP LOCKED są sprawdzane na prawdziwym silniku.
+    # To nadal jest H2 UDAJĄCE PostgreSQL, więc migracje, SKIP LOCKED i porównania tekstu
+    # są sprawdzane naprawdę dopiero na kontenerze - czyli w domyślnym przebiegu i w CI.
+    # Zielone `-Ph2` nie jest obietnicą zielonego CI i nie ma nią być.
     url: "jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1;MODE=PostgreSQL"
     driver-class-name: org.h2.Driver
     username: sa
     password: ""
-    # Pula połączeń przycięta DLA TESTÓW - na H2 bez znaczenia, na PostgreSQL-u warunek
-    # tego, żeby suite w ogóle wstała.
+    # Pula połączeń przycięta DLA TESTÓW - na H2 bez znaczenia, na PostgreSQL-u (czyli
+    # w domyślnym przebiegu, na kontenerze) warunek tego, żeby suite w ogóle wstała.
     #
     # Spring CACHE'UJE konteksty testowe i nie zamyka ich do końca JVM-a, a każdy kontekst
     # trzyma własną pulę Hikari. Domyślnie to 10 połączeń, otwieranych OD RAZU i trzymanych
     # bezczynnie, bo minimum-idle domyślnie równa się maximum-pool-size. Kontekstów jest
     # kilkanaście - różnicuje je nie tylko @TestPropertySource, ale też każdy inny zestaw
     # @MockitoBean - więc przy max_connections = 100 (domyślne w postgres:17-alpine, czyli
-    # i w jobie "integration") budżet kończy się przy jedenastym kontekście.
+    # i w kontenerze podnoszonym przez TestInfrastructure) budżet kończy się przy
+    # jedenastym kontekście. Po scaleniu jobów CI dotyczy to KAŻDEGO przebiegu poza -Ph2,
+    # a nie tylko jednego joba - czyli objaw jest teraz widoczny od razu, lokalnie.
     #
     # Objaw jest mylący i dlatego ten komentarz jest tak długi: pada "Failed to load
     # ApplicationContext" w KLASIE, która akurat wstawała jako pierwsza po wyczerpaniu
@@ -93,6 +103,10 @@ app:
   # sprawdzają sam limiter, włączają go u siebie przez @TestPropertySource.
   rate-limit:
     enabled: false
+    # W domyślnym przebiegu podmieniane na "redis" przez TestInfrastructure - kubełki lądują
+    # wtedy w kontenerze i RedisBucketProvider jest w ogóle wykonywany. Kontener jest świeży
+    # przy każdym przebiegu, więc kubełki z poprzedniego nie mają jak przejść; dlatego
+    # TestInfrastructure celowo nie włącza testcontainers.reuse.enable.
     store: memory
     policies: []
   outbox:
@@ -132,10 +146,11 @@ app:
       api-key: ""
       connect-timeout: 1s
       read-timeout: 2s
-  # Magazyn w pamięci procesu - z tego samego powodu, dla którego testy chodzą na H2
-  # i na atrapie tłumacza: suite ma nie wymagać stojącej infrastruktury. Prawdziwy
-  # S3ObjectStore jest wykonywany wyłącznie w jobie "integration" (MinIO w kontenerze),
-  # tak samo jak RedisBucketProvider.
+  # Magazyn w pamięci procesu - wariant profilu -Ph2, tam gdzie nie ma Dockera.
+  # W domyślnym przebiegu TestInfrastructure podmienia to na "s3" wskazujące MinIO
+  # w kontenerze, i to jest jedyne miejsce, gdzie S3ObjectStore się wykonuje.
+  # Atrapa tłumacza (provider: echo) zostaje w OBU wariantach: dostawcy nie stawia się
+  # w kontenerze, bo DeepL jest usługą zewnętrzną i kosztuje znaki.
   storage:
     type: memory
   account-lock:

@@ -129,6 +129,45 @@
 			<artifactId>h2</artifactId>
 			<scope>test</scope>
 		</dependency>
+		<!--
+			Testcontainers - silniki produkcyjne (PostgreSQL, Redis, MinIO) podnoszone
+			na czas testów. Wersją zarządza BOM Spring Boota (testcontainers-bom),
+			więc bez podawania jej tutaj.
+
+			UWAGA na nazwy artefaktów: w Testcontainers 2.x moduły nazywają się
+			testcontainers-<moduł>, a nie samą nazwą silnika jak w 1.x - stary zapis
+			<artifactId>postgresql</artifactId> rozwiązałby się na STEROWNIK JDBC
+			PostgreSQL-a o tym samym identyfikatorze, a nie na moduł Testcontainers.
+
+			Redis leci na GenericContainerze z rdzenia, świadomie bez modułu com.redis:
+			potrzebny jest jeden wystawiony port, a nie API opakowujące go w klasę.
+		-->
+		<dependency>
+			<groupId>org.testcontainers</groupId>
+			<artifactId>testcontainers</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<!--
+			Launcher JUnit Platform. Surefire dokłada go sobie sam DO URUCHOMIENIA, ale nie
+			do KOMPILACJI testów - a TestInfrastructure implementuje LauncherSessionListener,
+			czyli typ z tego artefaktu. Bez tej zależności kod się nie kompiluje, mimo że
+			w czasie działania byłby na ścieżce klas. Wersją zarządza BOM Spring Boota.
+		-->
+		<dependency>
+			<groupId>org.junit.platform</groupId>
+			<artifactId>junit-platform-launcher</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.testcontainers</groupId>
+			<artifactId>testcontainers-postgresql</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.testcontainers</groupId>
+			<artifactId>testcontainers-minio</artifactId>
+			<scope>test</scope>
+		</dependency>
 		<!-- Migracje bazy danych.
 		     UWAGA: w Spring Boot 4 autokonfiguracje zostały wyniesione z spring-boot-autoconfigure
 		     do osobnych modułów. Sam liquibase-core NIE uruchamia migracji - potrzebny jest
@@ -339,4 +378,34 @@
 			</plugin>
 		</plugins>
 	</build>
+
+	<profiles>
+		<!--
+			Szybka pętla lokalna BEZ Dockera: ./mvnw test -Ph2
+
+			Wyłącza kontenery (patrz TestInfrastructure) i zostawia konfigurację
+			z application-test.yml, czyli H2 w trybie zgodności z PostgreSQL-em.
+
+			CI tej ścieżki NIE używa i celowo: zielone -Ph2 nie jest obietnicą zielonego
+			CI. H2 nie odwzorowuje migracji Liquibase na docelowym silniku, FOR UPDATE
+			SKIP LOCKED, RedisBucketProvidera ani S3ObjectStore'a - a właśnie tam siedziały
+			błędy, które ten projekt już raz złapał dopiero na PostgreSQL-u.
+		-->
+		<profile>
+			<id>h2</id>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.apache.maven.plugins</groupId>
+						<artifactId>maven-surefire-plugin</artifactId>
+						<configuration>
+							<systemPropertyVariables>
+								<test.database>h2</test.database>
+							</systemPropertyVariables>
+						</configuration>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
+	</profiles>
 </project>

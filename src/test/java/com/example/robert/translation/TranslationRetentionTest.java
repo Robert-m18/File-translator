@@ -67,7 +67,7 @@ class TranslationRetentionTest {
     /**
      * created_at ustawiamy przez SQL, bo encja nadaje je w konstruktorze. Instant przez
      * TestTime.sql - sterownik PostgreSQL-a nie zbinduje go inaczej, a H2 przyjąłby go
-     * bez mrugnięcia i błąd wyszedłby dopiero w jobie "integration".
+     * bez mrugnięcia i błąd ukrywałby się na profilu -Ph2.
      */
     private Long jobCreatedAgo(Duration age, TranslationStatus status) {
         TranslationJob job = jobRepository.save(TranslationTestSupport.storedJob(

@@ -91,7 +91,7 @@ class TranslationWorkerTest {
     /**
      * Cofa next_attempt_at, żeby zlecenie było znów gotowe do wzięcia bez czekania na backoff.
      * Instant przez TestTime.sql - sterownik PostgreSQL-a nie zbinduje go inaczej, a H2
-     * przyjąłby go bez mrugnięcia i błąd wyszedłby dopiero w jobie "integration".
+     * przyjąłby go bez mrugnięcia i błąd ukrywałby się na profilu -Ph2.
      */
     private void makeReady() {
         jdbcTemplate.update("update translation_jobs set next_attempt_at = ? where status = 'PENDING'",

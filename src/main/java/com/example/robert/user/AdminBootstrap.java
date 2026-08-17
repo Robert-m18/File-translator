@@ -37,7 +37,7 @@ import java.util.stream.Collectors;
  * Dlaczego kod, a nie changeset Liquibase: migracja nie policzy BCrypta, więc trzeba by
  * wpisać gotowy hash do repozytorium - czyli rozesłać to samo hasło administratora do
  * wszystkich środowisk. Taki wiersz wchodziłby też do każdego kontekstu testowego
- * i do joba integration w CI, i łamałby konwencję, że żaden changeset nie wstawia danych.
+ * i łamałby konwencję, że żaden changeset nie wstawia danych.
  *
  * Dwie reguły poniżej są nośne i nie wolno ich "uprościć":
  * - istniejącego konta NIE nadpisujemy hasłem z konfiguracji (restart nie może cofać

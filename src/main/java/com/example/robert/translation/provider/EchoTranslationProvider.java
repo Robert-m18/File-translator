@@ -18,8 +18,10 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * DLACZEGO ISTNIEJE, choć nie tłumaczy: bez niego całego przepływu nie da się uruchomić
  * bez konta u zewnętrznego dostawcy. Konkretnie kupuje trzy rzeczy:
- *  - szybki job w CI zostaje HERMETYCZNY (żadnego ruchu na zewnątrz, żadnego sekretu
- *    w repozytorium, żadnej zależności od tego, czy cudzy serwis akurat działa),
+ *  - przebieg testów zostaje HERMETYCZNY (żadnego ruchu na zewnątrz, żadnego sekretu
+ *    w repozytorium, żadnej zależności od tego, czy cudzy serwis akurat działa). Testy
+ *    podnoszą sobie bazę, Redisa i magazyn w kontenerach, ale dostawcy tłumaczeń nie
+ *    postawi żaden kontener - to usługa zewnętrzna, która kosztuje znaki,
  *  - `docker compose up` daje działającą aplikację od pierwszego uruchomienia, tak samo
  *    jak Mailpit daje działającą pocztę bez konta u dostawcy poczty,
  *  - testy workera sprawdzają kolejkę, rezerwację i ponowienia bez zgadywania, co odpowie

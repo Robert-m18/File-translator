@@ -12,6 +12,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # JEDEN przebieg testów, na silnikach używanych na produkcji. Wcześniej stały tu dwa joby:
+  # "build" na H2 i kubełkach w pamięci oraz "integration" na kontenerach usług, z konfiguracją
+  # podmienianą kilkunastoma zmiennymi środowiskowymi wpisanymi wprost w ten plik. Kontenery
+  # podnosi teraz sam przebieg testów (TestInfrastructure), więc drugi job nie miał już czego
+  # dokładać - a lista zmiennych w YAML-u przestała być drugim miejscem, w którym trzeba
+  # pamiętać o każdym nowym ustawieniu.
+  #
+  # Co ten job faktycznie wykonuje, a czego przebieg na H2 wykonać nie może:
+  #   - migracje Liquibase na PostgreSQL-u (dropIndex, dropTable, addNotNullConstraint
+  #     zachowują się różnie w różnych silnikach, a ddl-auto: validate wykryje
+  #     rozjazd encji ze schematem dopiero przy starcie aplikacji);
+  #   - FOR UPDATE SKIP LOCKED w skrzynce nadawczej na prawdziwym PostgreSQL-u;
+  #   - porównania tekstu Z ROZRÓŻNIANIEM wielkości liter, czego H2 w trybie zgodności nie
+  #     odwzorowuje wiernie - a od tego zależy wyszukiwanie po adresie email (EmailNormalizer);
+  #   - RedisBucketProvider, czyli gałąź limitera, która na H2 nigdy się nie wykonywała;
+  #   - S3ObjectStore, czyli jedyną gałąź magazynu plików rozmawiającą z S3 - podpisywanie
+  #     żądań, kasowanie po prefiksie, mapowanie braku obiektu na ObjectMissingException.
+  #
+  # Runnery GitHuba mają Dockera, więc Testcontainers nie wymaga tu żadnej konfiguracji.
   build:
     name: Build & test
     runs-on: ubuntu-latest
@@ -49,143 +68,16 @@ jobs:
           path: target/surefire-reports/
           if-no-files-found: warn
 
-  # Ten sam zestaw testów, ale na silnikach używanych na produkcji zamiast na H2
-  # i na kubełkach w pamięci. Osobny job, a nie zamiast poprzedniego: szybki build
-  # na H2 ma dalej dawać wynik w kilkadziesiąt sekund, bez czekania na kontenery.
-  #
-  # Co to faktycznie sprawdza, a czego build na H2 sprawdzić nie może:
-  #   - migracje Liquibase na PostgreSQL-u (dropIndex, dropTable, addNotNullConstraint
-  #     zachowują się różnie w różnych silnikach, a ddl-auto: validate wykryje
-  #     rozjazd encji ze schematem dopiero przy starcie aplikacji);
-  #   - FOR UPDATE SKIP LOCKED w skrzynce nadawczej na prawdziwym PostgreSQL-u;
-  #   - porównania tekstu Z ROZRÓŻNIANIEM wielkości liter, czego H2 w trybie
-  #     zgodności nie odwzorowuje wiernie - a od tego zależy wyszukiwanie po adresie
-  #     email (patrz EmailNormalizer);
-  #   - RedisBucketProvider, czyli jedyną gałąź limitera, która na profilu testowym
-  #     nigdy się nie wykonywała;
-  #   - S3ObjectStore, czyli jedyną gałąź magazynu plików, która na profilu testowym
-  #     nigdy się nie wykonuje (tam działa wariant w pamięci). Bez tego joba cały kod
-  #     rozmawiający z S3 - podpisywanie żądań, kasowanie po prefiksie, mapowanie
-  #     braku obiektu na ObjectMissingException - nie byłby wykonany ANI RAZU przed
-  #     wdrożeniem, dokładnie jak Redis przed dołożeniem tego joba.
-  integration:
-    name: Testy na PostgreSQL i Redisie
-    runs-on: ubuntu-latest
-
-    services:
-      # Wersje takie same jak w docker-compose.yml - CI ma sprawdzać to, co lokalnie.
-      postgres:
-        image: postgres:17-alpine
-        env:
-          POSTGRES_DB: userapitest
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        # Bez health checka job ruszyłby, zanim baza przyjmuje połączenia - kontener
-        # wstaje w sekundę, ale inicjacja katalogu danych trwa dłużej.
-        options: >-
-          --health-cmd="pg_isready -U postgres -d userapitest"
-          --health-interval=5s
-          --health-timeout=5s
-          --health-retries=20
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd="redis-cli ping"
-          --health-interval=5s
-          --health-timeout=3s
-          --health-retries=10
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up JDK 21
-        uses: actions/setup-java@v4
-        with:
-          java-version: '21'
-          distribution: 'temurin'
-          cache: maven
-
-      # MinIO uruchamiany KROKIEM, a nie jako service container obok postgresa i redisa,
-      # i to nie z wygody: kontenery usług w GitHub Actions nie pozwalają podać polecenia
-      # startowego, a obraz minio/minio wymaga argumentu "server /data" - bez niego kontener
-      # tylko wypisuje pomoc i kończy pracę. Docker run daje tę jedną rzecz, której brakuje.
-      - name: Start MinIO
-        run: |
-          docker run -d --name minio -p 9000:9000 \
-            -e MINIO_ROOT_USER=minioadmin \
-            -e MINIO_ROOT_PASSWORD=minioadmin \
-            minio/minio:latest server /data
-
-          # Czekanie na gotowość, bo "kontener wystartował" to nie to samo co "przyjmuje
-          # żądania" - ta sama zasada co health check przy bazie.
-          for i in $(seq 1 30); do
-            curl -sf http://127.0.0.1:9000/minio/health/live && break
-            sleep 2
-          done
-
-          # Kubełek zakładany z osobna, tak jak robi to usługa minio-init w docker-compose.
-          # Aplikacja go NIE tworzy: prawo do zakładania kubełków jest na produkcji
-          # uprawnieniem administracyjnym i aplikacja nie ma powodu go mieć.
-          #
-          # --entrypoint /bin/sh JEST OBOWIĄZKOWE i nie jest ostrożnością: obraz minio/mc ma
-          # ENTRYPOINT ustawiony na samo "mc", więc "docker run minio/mc sh -c ..." podaje
-          # słowo "sh" jako PODPOLECENIE mc, a nie jako powłokę. Kończy się to komunikatem
-          #   mc: <ERROR> `sh` is not a recognized command.
-          # czyli błędem wyglądającym na literówkę w składni mc, a nie na złe wywołanie
-          # dockera. docker-compose.yml robi to samo przez "entrypoint: /bin/sh -c".
-          docker run --rm --network host --entrypoint /bin/sh minio/mc:latest -c "
-            mc alias set local http://127.0.0.1:9000 minioadmin minioadmin &&
-            mc mb --ignore-existing local/file-translator"
-
-      - name: Test against PostgreSQL and Redis
-        # Przez zmienne środowiskowe, a NIE przez osobny profil testowy: profil trzeba by
-        # aktywować w każdej klasie testowej (@ActiveProfiles("test") jest wpisane na sztywno),
-        # a drugi plik z konfiguracją rozjeżdżałby się z pierwszym przy każdej zmianie.
-        # Zmienne środowiskowe stoją w kolejności pierwszeństwa Springa WYŻEJ niż
-        # application-test.yml, więc podmieniają tylko to, co ma być inne, i dziedziczą resztę.
-        env:
-          SPRING_DATASOURCE_URL: jdbc:postgresql://127.0.0.1:5432/userapitest
-          SPRING_DATASOURCE_USERNAME: postgres
-          SPRING_DATASOURCE_PASSWORD: postgres
-          # Jawnie, bo application-test.yml wskazuje sterownik H2 - sama zmiana URL-a
-          # zostawiłaby ustawiony org.h2.Driver.
-          SPRING_DATASOURCE_DRIVER_CLASS_NAME: org.postgresql.Driver
-          # RedisBucketProvider łączy się w konstruktorze, więc samo podniesienie kontekstu
-          # sprawdza konfigurację połączenia; RateLimitTest sprawdza potem liczenie kubełków.
-          APP_RATE_LIMIT_STORE: redis
-          APP_RATE_LIMIT_REDIS_URL: redis://127.0.0.1:6379
-          # Magazyn plików na prawdziwym S3 (MinIO) zamiast wariantu w pamięci -
-          # to jedyne miejsce, gdzie S3ObjectStore jest w ogóle wykonywany.
-          APP_STORAGE_TYPE: s3
-          APP_STORAGE_ENDPOINT: http://127.0.0.1:9000
-          APP_STORAGE_BUCKET: file-translator
-          APP_STORAGE_REGION: eu-central-1
-          APP_STORAGE_ACCESS_KEY: minioadmin
-          APP_STORAGE_SECRET_KEY: minioadmin
-        run: ./mvnw -B -ntp test
-
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: surefire-reports-postgres
-          path: target/surefire-reports/
-          if-no-files-found: warn
-
   docker:
     name: Docker image builds
     runs-on: ubuntu-latest
-    # OBA joby testowe, nie sam "build". Wcześniej stało tu "needs: build", więc obraz
-    # powstawał także wtedy, gdy "integration" był czerwony - a to jedyny job sprawdzający
-    # migracje i zapytania na silniku, którego używa produkcja. Trafione 2026-08-09:
-    # 7 błędów na PostgreSQL-u przy zielonym H2 i mimo to zbudowany obraz.
-    # needs wymaga POWODZENIA wszystkich wymienionych jobów - porażka albo anulowanie
-    # któregokolwiek pomija ten job.
-    needs: [ build, integration ]
+    # needs wymaga POWODZENIA wymienionego joba - porażka albo anulowanie pomija ten job.
+    # Powód historyczny, wart zapamiętania po scaleniu jobów: kiedy testy stały w dwóch
+    # jobach, przez pewien czas było tu "needs: build", więc obraz powstawał także wtedy,
+    # gdy czerwony był ten drugi - a to on jako jedyny sprawdzał migracje i zapytania na
+    # silniku produkcyjnym. Trafione 2026-08-09: 7 błędów na PostgreSQL-u przy zielonym H2
+    # i mimo to zbudowany obraz.
+    needs: [ build ]
     steps:
       - uses: actions/checkout@v4
 

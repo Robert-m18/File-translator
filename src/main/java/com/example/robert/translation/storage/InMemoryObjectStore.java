@@ -15,10 +15,11 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * Magazyn w pamięci procesu. Domyślna implementacja.
  *
- * PO CO ISTNIEJE: żeby suite testowa i szybki job CI nie wymagały stojącego magazynu
- * obiektowego. Dokładnie ta sama rola co Mailpit dla poczty i EchoTranslationProvider
- * dla tłumaczenia - lokalne zastępstwo, dzięki któremu `./mvnw test` i `docker compose up`
- * są działającym systemem bez konta u dostawcy.
+ * PO CO ISTNIEJE: żeby aplikacja i testy nie wymagały stojącego magazynu obiektowego.
+ * Dokładnie ta sama rola co Mailpit dla poczty i EchoTranslationProvider dla tłumaczenia -
+ * lokalne zastępstwo, dzięki któremu `docker compose up` jest działającym systemem bez
+ * konta u dostawcy. W testach obsługuje już tylko wariant `./mvnw test -Ph2` (bez Dockera):
+ * domyślny przebieg idzie na MinIO w kontenerze, więc S3ObjectStore wykonuje się naprawdę.
  *
  * NIE NADAJE SIĘ DO NICZEGO POZA TYM i nie udaje, że się nadaje: zawartość ginie przy
  * restarcie, nie jest współdzielona między instancjami i rośnie bez ograniczenia. Przy dwóch

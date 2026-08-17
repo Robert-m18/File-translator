@@ -20,7 +20,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * S3 jest w ogóle włączony. Wariant w pamięci nie potrzebuje żadnego z tych ustawień
  * i nie ma powodu, żeby go do nich zmuszać.
  *
- * @param type      memory - mapa w pamięci procesu (testy, szybki job CI);
+ * @param type      memory - mapa w pamięci procesu (testy na profilu -Ph2, start bez magazynu);
  *                  s3 - prawdziwy magazyn obiektowy (MinIO lokalnie, S3 na produkcji)
  * @param endpoint  adres usługi zgodnej z S3. PUSTY oznacza prawdziwe AWS - wtedy adres
  *                  wylicza SDK z regionu i nazwy kubełka. Dla MinIO trzeba go podać.
@@ -45,7 +45,7 @@ public record StorageProperties(
 ) {
 
     public enum Type {
-        /** Mapa w pamięci procesu. Trzyma szybki job CI hermetycznym - rola Mailpita i atrapy ECHO. */
+        /** Mapa w pamięci procesu. Pozwala uruchomić aplikację bez magazynu - rola Mailpita i atrapy ECHO. */
         MEMORY,
         /** Magazyn zgodny z S3: MinIO z docker compose albo prawdziwe AWS S3. */
         S3

@@ -13,11 +13,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /**
  * Kontrakt magazynu obiektowego i budowa kluczy.
  *
- * Sprawdzany na wariancie w pamięci, bo to jedyna implementacja działająca bez stojącej
- * infrastruktury. S3ObjectStore przechodzi ten sam kontrakt w jobie "integration" (MinIO
- * w kontenerze) - dokładnie ta sama sytuacja co z RedisBucketProvider, który też jest
- * wykonywany wyłącznie tam. Asercje są celowo o ZACHOWANIU, a nie o mapie w środku, więc
- * przenoszą się na drugą implementację bez zmian.
+ * Sprawdzany na wariancie w pamięci, bo to jedyna implementacja działająca bez Dockera.
+ * S3ObjectStore jest wykonywany przez pozostałe testy - domyślny przebieg wskazuje je na MinIO
+ * w kontenerze (TestInfrastructure), tak samo jak limiter na Redisa. Asercje są celowo
+ * o ZACHOWANIU, a nie o mapie w środku, więc przenoszą się na drugą implementację bez zmian.
  *
  * Bez kontekstu Springa: to jest kod bez zależności na kontener, a każdy kontekst testowy
  * to kolejna pula połączeń trzymana do końca JVM-a.

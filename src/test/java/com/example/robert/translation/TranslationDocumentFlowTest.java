@@ -117,7 +117,7 @@ class TranslationDocumentFlowTest {
     /**
      * Cofa next_attempt_at, żeby zlecenie było znów gotowe do wzięcia bez czekania na odstęp
      * między odpytaniami. Instant przez TestTime.sql - sterownik PostgreSQL-a nie zbinduje
-     * go inaczej, a H2 przyjąłby go bez mrugnięcia i błąd wyszedłby w jobie "integration".
+     * go inaczej, a H2 (profil -Ph2) przyjąłby go bez mrugnięcia i błąd ukrywałby się tam.
      */
     private void makeReady() {
         jdbcTemplate.update("update translation_jobs set next_attempt_at = ? where status <> 'DONE'",
