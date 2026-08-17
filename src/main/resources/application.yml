@@ -274,4 +274,4 @@ springdoc:
 logging:
   level:
     root: INFO
-    com.example.robert: DEBUG
+    com.example.filetranslator: DEBUG

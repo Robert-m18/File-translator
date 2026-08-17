@@ -72,6 +72,6 @@ springdoc:
 logging:
   level:
     root: WARN
-    com.example.robert: INFO
+    com.example.filetranslator: INFO
   file:
     name: logs/app.log

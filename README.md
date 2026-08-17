@@ -1,12 +1,19 @@
 # File Translator API
 
-Backend REST API w Spring Boot 4 / Java 21. Docelowo usługa tłumaczenia plików;
-obecnie zaimplementowany jest kompletny moduł uwierzytelniania — rejestracja z potwierdzeniem
-adresu, logowanie na ciasteczkach, rotacja sesji, blokada konta i reset hasła. Panelu
-administracyjnego ani zarządzania użytkownikami nie ma (patrz sekcja Endpointy).
+Backend REST API w Spring Boot 4 / Java 21 — usługa tłumaczenia plików (`.txt`, PDF, XLSX)
+z kompletnym uwierzytelnianiem i panelem administracyjnym.
 
-> Nazwa artefaktu (`file_translator`) i pakiet (`com.example.robert`) pochodzą z pierwotnego
-> szkieletu projektu — ich uporządkowanie jest zaplanowane w etapie refaktoryzacji struktury.
+- **Tłumaczenie** — upload, kolejka zadań w bazie, worker w tle, deduplikacja po odcisku treści,
+  pliki w magazynie obiektowym (S3/MinIO), powiadomienie mailem.
+- **Uwierzytelnianie** — rejestracja z potwierdzeniem adresu, logowanie na ciasteczkach `httpOnly`,
+  rotacja tokenów odświeżających z wykrywaniem kradzieży, blokada konta, reset hasła.
+- **Panel administracyjny** — lista i wyszukiwanie kont, blokowanie z powodem, wymuszone
+  wylogowanie.
+
+Interfejs (React + Vite) jest osobnym repozytorium:
+**[File_translator_frontend_REACT](https://github.com/Robert-m18/File_translator_frontend_REACT)**.
+
+> Nazwa artefaktu Mavena (`file_translator`) została z pierwotnego szkieletu projektu.
 
 ---
 
@@ -17,6 +24,7 @@ administracyjnego ani zarządzania użytkownikami nie ma (patrz sekcja Endpointy
 | Runtime | Java 21, Spring Boot 4.0.6 |
 | Bezpieczeństwo | Spring Security 7, JWT (jjwt), BCrypt |
 | Persystencja | Spring Data JPA / Hibernate, PostgreSQL 17 |
+| Pliki | magazyn obiektowy — AWS SDK v2 (S3), lokalnie MinIO |
 | Migracje | Liquibase (XML) |
 | Mapowanie DTO | ręczne — MapStruct usunięty, obsługiwał jeden mapper do nieistniejącego już CRUD-u |
 | Dokumentacja | springdoc-openapi 3 (OpenAPI 3 + Swagger UI) |
@@ -31,7 +39,7 @@ administracyjnego ani zarządzania użytkownikami nie ma (patrz sekcja Endpointy
 
 ### Docker Compose (zalecane)
 
-Podnosi PostgreSQL, lokalny serwer SMTP i aplikację:
+Podnosi PostgreSQL, Redis, magazyn obiektowy (MinIO), lokalny serwer SMTP i aplikację:
 
 ```bash
 docker compose up -d
@@ -43,7 +51,11 @@ docker compose up -d
 | Swagger UI | http://localhost:2009/swagger-ui.html |
 | Health check | http://localhost:2009/actuator/health |
 | Skrzynka pocztowa (Mailpit) | http://localhost:8025 |
+| Magazyn plików (MinIO) | http://localhost:9001, `minioadmin`/`minioadmin` |
 | Baza (DBeaver/psql) | `localhost:5433`, baza `userapitest`, `postgres`/`postgres` |
+
+Domyślnie wstaje z atrapą tłumacza (`echo`), więc działa bez konta u dostawcy. Prawdziwe
+tłumaczenie: patrz sekcja *Tłumaczenie plików*.
 
 Maile weryfikacyjne nie wychodzą na zewnątrz — lądują w Mailpicie pod adresem powyżej.
 
@@ -95,21 +107,30 @@ Kod jest podzielony **według funkcjonalności** (package-by-feature), a nie wed
 technicznych (`controllers/`, `services/`, `repositories/`):
 
 ```
-com.example.robert
+com.example.filetranslator
 ├── auth/            logowanie, sesje, rotacja tokenów, blokada konta, rejestracja
 │   ├── dto/  model/  repository/
-├── user/            konto użytkownika, CRUD, encja User
+├── user/            konto użytkownika, encja User (auth zależy od user, nigdy odwrotnie)
 │   ├── dto/  model/
-├── notification/    wysyłka maili transakcyjnych
+├── admin/           panel: lista i wyszukiwanie kont, blokada, wymuszone wylogowanie
+│   ├── dto/  exception/
+├── translation/     tłumaczenie: upload, kolejka, worker, dostawca, magazyn obiektowy
+│   ├── dto/  model/  repository/  exception/  provider/  storage/
+├── notification/    wysyłka maili transakcyjnych (skrzynka nadawcza)
 └── common/          wspólna infrastruktura
-    ├── config/         konfiguracja Springa (bezpieczeństwo, OpenAPI, async)
+    ├── config/         konfiguracja Springa (bezpieczeństwo, OpenAPI)
     ├── security/       JWT, ciasteczka, limity żądań, punkty wejścia Spring Security
     │   └── ratelimit/  wymienny magazyn limitów (pamięć / Redis)
     ├── web/            format błędów (RFC 9457), odpowiedzi sukcesu
     ├── exception/      wyjątki dziedzinowe
     ├── observability/  korelacja żądań
+    ├── time/           obcinanie znaczników do precyzji kolumny
     └── validation/     własne adnotacje walidacyjne
 ```
+
+`admin/` stoi **nad** `user/` i `auth/`, a nie w którymś z nich: blokada konta musi unieważnić
+sesje, czyli sięgnąć do `auth/`, więc umieszczenie panelu w `user/` odwróciłoby kierunek
+zależności `auth → user` w cykl.
 
 **Dlaczego tak:**
 
@@ -199,8 +220,19 @@ W bazie leży wyłącznie SHA-256 tokenu (`TokenHasher`) — wyciek dumpu nie da
 
 Rozdzielenie jest celowe: limit per IP nie chroni konta przed atakiem rozproszonym,
 a blokada konta nie chroni serwera przed zalewem żądań na tysiąc różnych kont.
-Filtr limitujący działa **przed** łańcuchem Spring Security, więc odrzucone żądanie
-nie kosztuje ani zapytania do bazy, ani porównania hasha BCrypt.
+
+Filtr limitujący stoi **wewnątrz** łańcucha Spring Security, zaraz za `CorsFilter` — i to
+konkretne miejsce jest naprawą błędu, nie porządkami. Wcześniej działał przed całym łańcuchem,
+czyli przed CORS-em, więc odpowiedź `429` wychodziła **bez** nagłówka
+`Access-Control-Allow-Origin`. Przeglądarka taką odpowiedź blokuje, więc SPA na innym adresie
+nigdy nie dostawało komunikatu „spróbuj za N s" — `fetch` rzucał błąd sieci, nie do odróżnienia
+od martwego serwera. Ciało odpowiedzi było poprawne od początku, po prostu nie docierało.
+Test sprawdzający sam status `429` przechodził w obu wariantach; regresja
+(`RateLimitTest.rateLimited429_shouldCarryCorsHeaders`) sprawdza **nagłówek**.
+
+Ograniczanie dalej dzieje się przed CSRF, przed jakimkolwiek zapytaniem do bazy i przed
+porównaniem hasha BCrypt — `CorsFilter` jest tani. Świadomie przyjęta konsekwencja: żądania
+odrzucone przez CSRF też zużywają żetony z kubełka.
 
 **Magazyn limitów jest wymienny** (`app.rate-limit.store`):
 
@@ -217,19 +249,34 @@ zależność sieciową na ścieżce **każdego** żądania do `/auth/**` i kolej
 dlatego nie jest wartością domyślną. Redis nie jest też wymagany do startu aplikacji,
 dopóki `store` ma wartość `memory`.
 
-### Rejestracja — dwuetapowa, oparta o zdarzenia
+### Rejestracja — przez tabelę poczekalni, z transakcyjną skrzynką nadawczą
 
-1. `AuthService.register` — zapis użytkownika z `enabled=false`, wygenerowanie losowego
-   UUID i zapis wyłącznie jego **hasha SHA-256** (ważność 24 h), publikacja `UserRegisteredEvent`.
-2. `UserRegisteredEventListener` — `@TransactionalEventListener(phase = AFTER_COMMIT)`:
-   mail poleci wyłącznie wtedy, gdy transakcja rejestracji faktycznie się zatwierdziła.
-3. `EmailService.sendVerificationEmail` — `@Async` (osobna pula, prefiks `async-mail-`),
-   szablon Thymeleaf, link do `/confirm-email?token=...` na froncie.
-4. `AuthService.confirmEmail` — wyszukanie po hashu, sprawdzenie ważności,
-   `enabled = true` przez dirty checking, usunięcie zużytego tokenu.
-5. `ExpiredTokenCleanupJob` — `@Scheduled` (co noc o 3:00), czyszczenie wygasłych tokenów.
+1. `AuthService.register` — **nie tworzy** wiersza w `users`. Zapisuje `PendingRegistration`
+   (adres, imię, hash BCrypt hasła, **SHA-256** losowego UUID, ważność 24 h) i zamawia maila
+   przez `MailOutbox`, czyli wierszem w `outbox_messages` **w tej samej transakcji**.
+2. `OutboxPublisher` — `@Scheduled`, rezerwuje paczkę (`FOR UPDATE SKIP LOCKED`) i wysyła
+   równolegle, z ponowieniami i wykładniczym odstępem.
+3. `AuthService.confirmEmail` — wyszukanie po hashu, sprawdzenie ważności, utworzenie konta
+   przez `UserService.createConfirmedUser` od razu z `enabled = true`.
+4. `ExpiredTokenCleanupJob` / `OutboxCleanupJob` — nocne czyszczenie wygasłych zgłoszeń
+   i wysłanych maili.
 
-W bazie nie ma surowego tokenu — wyciek dumpu bazy nie pozwala aktywować cudzego konta.
+Trzy rzeczy są tu nośne:
+
+* **Wiersz `users` z `enabled=false` jest stanem niemożliwym.** Wcześniej rejestracja tworzyła
+  konto wyłączone i nadpisywała je przy ponownej próbie — obcy mógł więc podmienić hasło
+  cudzej rejestracji w toku, a ofiara, klikając najnowszy link **we własnej skrzynce**,
+  aktywowała konto z hasłem napastnika. Dlatego `pending_registrations.email` celowo **nie jest
+  unikatem**: równoległe zgłoszenia na jeden adres to poprawny stan, a potwierdzenie aktywuje
+  dokładnie to, którego token był w klikniętym linku.
+* **Skrzynka nadawcza zamiast zdarzenia w pamięci.** Poprzednia wersja
+  (`@TransactionalEventListener(AFTER_COMMIT)` + `@Async`) też nie wysyłała maili z wycofanych
+  transakcji, ale zamiar istniał wyłącznie w pamięci procesu — awaria SMTP albo restart między
+  zatwierdzeniem a wysyłką kasowały go bez śladu. Cena: dostarczenie jest **co najmniej raz**.
+* **W bazie nie ma surowego tokenu** — wyciek dumpu nie pozwala aktywować cudzego konta.
+
+Rejestracja **nigdy nie zdradza, czy adres jest zajęty**: odpowiedź to zawsze `202`, a właściciel
+zajętego adresu dostaje maila „konto już istnieje" zamiast napastnika dostać `409`.
 
 ### Format błędów — RFC 9457
 
@@ -268,20 +315,28 @@ Każdy błąd to `application/problem+json`:
 | POST | `/auth/logout` | publiczny | Unieważnia rodzinę tokenów i czyści ciasteczka |
 | POST | `/auth/forgot-password` | publiczny | Wysyła link resetu — identyczna odpowiedź dla adresu znanego i nieznanego |
 | POST | `/auth/reset-password` | token z maila | Ustawia nowe hasło, unieważnia wszystkie sesje |
-| POST | `/translations` | **zalogowany** | Zlecenie tłumaczenia pliku `.txt` (`multipart/form-data`) — `202` z identyfikatorem |
+| POST | `/translations` | **zalogowany** | Zlecenie tłumaczenia (`.txt`, PDF, XLSX; `multipart/form-data`) — `202` z identyfikatorem |
 | GET | `/translations` | **zalogowany** | Lista **własnych** zleceń, stronicowana, bez treści plików |
 | GET | `/translations/{id}` | **właściciel** | Status zlecenia |
-| GET | `/translations/{id}/content` | **właściciel** | Przetłumaczony plik (`text/plain`, `Content-Disposition: attachment`) |
-| DELETE | `/translations/{id}` | **właściciel** | Usuwa zlecenie razem z treścią |
+| GET | `/translations/{id}/content` | **właściciel** | Przetłumaczony plik (`Content-Disposition: attachment`) |
+| DELETE | `/translations/{id}` | **właściciel** | Usuwa zlecenie razem z plikami |
+| GET | `/users?q=&page=&size=` | `ROLE_ADMIN` | Lista kont z wyszukiwaniem po adresie i imieniu |
+| GET | `/users/{id}` | `ROLE_ADMIN` | Pojedyncze konto |
+| POST | `/users/{id}/block` | `ROLE_ADMIN` | Blokada konta — powód **wymagany**, sesje unieważniane |
+| POST | `/users/{id}/unblock` | `ROLE_ADMIN` | Zdjęcie blokady |
+| POST | `/users/{id}/unlock` | `ROLE_ADMIN` | Wyzerowanie licznika nieudanych logowań |
+| POST | `/users/{id}/logout` | `ROLE_ADMIN` | Wymuszone wylogowanie ze wszystkich urządzeń |
 | GET | `/actuator/health`, `/actuator/info` | publiczny | Health check i probe'y dla orkiestratora |
 | GET | `/actuator/metrics`, `/actuator/prometheus` | `ROLE_ADMIN` | Metryki |
 
 Pełna specyfikacja: `/swagger-ui.html` (wyłączone na profilu `prod`).
 
-**`/users/**` nie istnieje.** `UserController` został usunięty razem z CRUD-em, którego nikt nie
-wywoływał. Reguła `/users/** → ROLE_ADMIN` została w `SecurityConfig` celowo: domyślna odmowa
-jest właściwym stanem wyjściowym, więc gdy kontroler wróci, jego endpointy będą chronione od
-pierwszego commitu, a nie dopiero po tym, jak ktoś zauważy, że są otwarte.
+**Panel administracyjny stoi pod `/users`, a nie pod `/admin/users`, i to jest decyzja.** Reguła
+`/users/** → ROLE_ADMIN` siedziała w `SecurityConfig` od czasu usunięcia starego CRUD-u —
+właśnie po to, żeby przyszły kontroler był chroniony od pierwszego commitu. Zamapowanie panelu
+gdziekolwiek indziej wymaga nowego dopasowania, a do czasu, aż ktoś je dopisze, panel wpada pod
+`anyRequest().authenticated()`, czyli jest otwarty dla **każdego zalogowanego**. Adres w
+przeglądarce (`/admin/users`) to trasa SPA i nie ma z tym nic wspólnego.
 
 ### Tłumaczenie plików
 
@@ -304,11 +359,22 @@ curl -b jar -OJ http://localhost:2009/translations/1/content
 
 | Ograniczenie | Wartość | Skąd się bierze |
 |---|---|---|
-| Rozmiar pliku | 256 KB | darmowy próg DeepL to 500 tys. znaków **miesięcznie na konto** — plik 1 MB wyczerpałby go dwukrotnie |
-| Format | wyłącznie `.txt`, UTF-8 | decyduje rozszerzenie i dekodowanie bajtów, nie nagłówek `Content-Type` od klienta |
+| Rozmiar `.txt` | 256 KB | darmowy próg DeepL to 500 tys. znaków **miesięcznie na konto** — plik 1 MB wyczerpałby go dwukrotnie |
+| Rozmiar PDF / XLSX | 2 MB | liczby znaków w dokumencie nie da się poznać przed wysłaniem, więc limit ogranicza **szkodę**, a nie budżet |
+| Format | `.txt` (UTF-8), PDF, XLSX | rozpoznawany po **zawartości** (`%PDF-`, sygnatura ZIP), nie po rozszerzeniu ani po `Content-Type` od klienta |
 | Znaki na dobę | 50 000 na użytkownika | limit dostawcy liczy się dla całego konta, więc jedna osoba mogłaby odciąć wszystkie pozostałe |
 | Żądań `POST` | 30/h z adresu IP | reguła limitera zawężona do metody — odpytywanie o status jest darmowe i nie zużywa puli |
-| Retencja | 30 dni od zlecenia | w bazie leżą **pliki użytkowników**; `DELETE` pozwala usunąć je wcześniej |
+| Retencja | 30 dni od zlecenia | to są **pliki użytkowników**; `DELETE` pozwala usunąć je wcześniej |
+
+Pliki leżą w magazynie obiektowym (MinIO lokalnie, S3 na produkcji), a w bazie zostaje sam
+**klucz** obiektu — nigdy URL, bo URL niesie kubełek, region i schemat, czyli wszystko, co się
+zmienia przy zmianie dostawcy. Pobranie idzie przez API, nie przez podpisany link: właściciela
+rozstrzyga warunek `user_id` w zapytaniu, przez który cudze zlecenie zwraca **404, nie 403**
+(403 potwierdzałoby, że takie id istnieje, a identyfikatory są sekwencyjne).
+
+Ten sam plik zlecony drugi raz **nie jest tłumaczony ponownie** — decyduje SHA-256 treści plus
+język docelowy i dostawca. Zakres jest **per użytkownik**: cache globalny byłby oszczędniejszy,
+ale natychmiastowe `DONE` zdradzałoby, że ktoś inny ma dokładnie ten plik.
 
 **Dostawca tłumaczenia jest wymienny** (`app.translation.provider`):
 
@@ -358,10 +424,17 @@ uzasadnienie i warunki zmiany w `CLAUDE.md`, sekcja *Accepted trade-offs*.
 |---|---|---|---|
 | `dev` (domyślny) | PostgreSQL z Compose'a (`localhost:5433`) | wartości domyślne w pliku | włączony |
 | `prod` | z `DATABASE_*` | wyłącznie ze zmiennych środowiskowych | wyłączony |
-| `test` | H2 w pamięci | w pliku testowym | — |
+| `test` | PostgreSQL w kontenerze (`-Ph2`: H2 w pamięci) | w pliku testowym | — |
 
 Zmienne środowiskowe dla `prod`: `DATABASE_URL`, `DATABASE_USER`, `DATABASE_PASSWORD`,
-`JWT_SECRET`, `FRONTEND_URL`, `MAIL_HOST`, `MAIL_USERNAME`, `MAIL_PASSWORD`.
+`JWT_SECRET`, `FRONTEND_URL`, `MAIL_HOST`, `MAIL_USERNAME`, `MAIL_PASSWORD`, `MAIL_FROM`
+oraz `STORAGE_*` przy magazynie S3.
+
+`MAIL_FROM` celowo **nie ma wartości domyślnej na `prod`**: adres nadawcy to nie to samo co
+login do SMTP (u dostawców typu SES czy SendGrid login jest kluczem API albo użytkownikiem IAM),
+a serwer odrzuca wtedy kopertę przy `MAIL FROM` i **nie wychodzi żaden mail** — przy niewidocznym
+objawie, bo `POST /auth/register` dalej odpowiada `202`. Brak zmiennej zatrzymuje start, zamiast
+pozwolić na wdrożenie, w którym nikt nie potwierdzi rejestracji.
 
 `JWT_SECRET` musi być kluczem zakodowanym w base64, o długości wystarczającej dla HMAC-SHA
 (min. 256 bitów) — patrz `JwtUtil.getKey()`.
@@ -391,7 +464,7 @@ który został już gdziekolwiek wykonany.
 | 0 | Naprawa fundamentów (Liquibase, ciasteczka, walidacja) | ✅ |
 | 1 | Higiena projektu (Docker, CI, OpenAPI, Actuator, ProblemDetail) | ✅ |
 | 2 | Refaktoryzacja struktury (package-by-feature) | ✅ |
-| 2b | Audyt encji (`createdAt`/`updatedAt`), przejście na `Instant` | ⏳ |
+| 2b | Audyt encji (`createdAt`/`updatedAt`), przejście na `Instant` + `timestamptz` | ✅ |
 | 3 | Twardnienie auth (rotacja refresh tokenów, rate limiting, lockout) | ✅ |
 | 3b | Reset hasła, skrzynka nadawcza maili, `GET /auth/me`, konto administratora | ✅ |
 | 3c | Migracja bazy na PostgreSQL 17 | ✅ |
@@ -400,4 +473,21 @@ który został już gdziekolwiek wykonany.
 | 6 | Logowanie przez Google (OAuth2) | ⏳ |
 | 7 | Testy integracyjne na Testcontainers | ✅ |
 | 8 | Translator plików — MVP (upload `.txt`, kolejka zadań, tłumaczenie, pobranie, mail) | ✅ |
-| 9 | Translator v2 (PDF/XLSX, SSE zamiast odpytywania, cache tłumaczeń) | ⏳ |
+| 9 | Translator v2 (cache tłumaczeń, magazyn obiektowy, PDF/XLSX) | ✅ |
+| 10 | Panel administracyjny (blokada kont, wymuszone wylogowanie) | ✅ |
+
+**Świadomie wykreślone, nie odłożone:**
+
+* **SSE zamiast odpytywania** — odpytywanie już się samo zatrzymuje (przy braku zlecenia
+  w toku front nie zakłada interwału), a tłumaczenia trwają sekundy, nie minuty. SSE byłoby
+  drugim mechanizmem transportu do utrzymania bez problemu do rozwiązania. Wyzwalacz powrotu:
+  zlecenia trwające minuty.
+* **Broker (Kafka) pod kolejką zleceń** — nie zastąpiłby tabeli statusów, bo logu nie da się
+  odpytać po kluczu, a dołożyłby podwójny zapis (wiersz + rekord na temacie bez wspólnej
+  transakcji), którego rozwiązaniem jest skrzynka nadawcza stojąca już obok. W jednym
+  deploymencie producent i konsument to ten sam proces. Wyzwalacz: drugi konsument zdarzeń
+  albo wydzielenie tłumaczenia do osobnej usługi — szew (`TranslationEvents`) jest gotowy.
+* **Czarna lista tokenów dostępowych** — wylogowanie unieważnia rodzinę tokenów odświeżających,
+  ale token dostępowy żyje jeszcze do 15 minut. Lista w Redisie przywraca stan po stronie serwera
+  na ścieżce **każdego** żądania, żeby skrócić okno istotne wyłącznie dla kogoś, kto już ten token
+  ma. Regulatorem jest `jwt.expiration`. Blokada konta tego okna nie ma — sprawdza ją `JwtFilter`.

@@ -55,6 +55,6 @@ management:
 logging:
   level:
     root: INFO
-    com.example.robert: DEBUG
+    com.example.filetranslator: DEBUG
     org.springframework.security: DEBUG
     liquibase: INFO
