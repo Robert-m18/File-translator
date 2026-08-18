@@ -27,7 +27,27 @@ import java.util.UUID;
 @Component
 public class JwtUtil {
 
-    private final String secret;
+    /**
+     * Klucz liczony RAZ, w konstruktorze, a nie przy każdym podpisie i każdym parsowaniu.
+     *
+     * Dawniej robiła to prywatna metoda getKey(), wołana z trzech miejsc - w tym z
+     * extractClaims(), czyli na KAŻDYM uwierzytelnionym żądaniu przez JwtFilter. Każde
+     * wywołanie dekodowało base64 i budowało nowy SecretKeySpec, żeby otrzymać obiekt
+     * identyczny z poprzednim: sekret jest wstrzykiwany raz i nie zmienia się przez całe
+     * życie beana. Koszt był mikrosekundowy, więc to nie jest optymalizacja - to usunięcie
+     * pracy, która nigdy nie miała powodu się powtarzać.
+     *
+     * SecretKeySpec jest niezmienny, a jjwt tworzy własny Mac na każdą operację, więc
+     * współdzielenie jednej instancji między wątkami jest bezpieczne.
+     *
+     * SKUTEK UBOCZNY, KTÓRY JEST TU ZALETĄ: zły JWT_SECRET (nie-base64 albo krótszy niż
+     * 256 bitów wymagane przez HS256) wywraca teraz START aplikacji, a nie pierwsze
+     * logowanie. Wcześniej kontekst wstawał zdrowo, a wyjątek z Keys.hmacShaKeyFor wychodził
+     * dopiero z ścieżki żądania jako 500 - czyli błąd konfiguracji przebrany za awarię
+     * aplikacji. To ta sama zasada, co w S3ClientConfig.requireComplete i w konstruktorze
+     * DeepLTranslationProvider: brakująca konfiguracja ma zatrzymać wdrożenie od razu.
+     */
+    private final SecretKey key;
     private final long expiration;
     private final long refreshExpiration;
 
@@ -36,16 +56,9 @@ public class JwtUtil {
             @Value("${jwt.expiration}") long expiration,
             @Value("${jwt.refresh-expiration}") long refreshExpiration
     ) {
-        this.secret = secret;
+        this.key = Keys.hmacShaKeyFor(Decoders.BASE64.decode(secret));
         this.expiration = expiration;
         this.refreshExpiration = refreshExpiration;
-    }
-
-    /**
-     * Zamienia String na kryptograficzny klucz
-     */
-    private SecretKey getKey() {
-        return Keys.hmacShaKeyFor(Decoders.BASE64.decode(secret));
     }
 
     /**
@@ -59,7 +72,7 @@ public class JwtUtil {
                 .subject(username)
                 .issuedAt(new Date())
                 .expiration(new Date(System.currentTimeMillis() + expiration))
-                .signWith(getKey())
+                .signWith(key)
                 .compact();
     }
 
@@ -77,7 +90,7 @@ public class JwtUtil {
                 .subject(username)
                 .issuedAt(new Date())
                 .expiration(new Date(System.currentTimeMillis() + refreshExpiration))
-                .signWith(getKey())
+                .signWith(key)
                 .compact();
     }
 
@@ -108,7 +121,7 @@ public class JwtUtil {
      */
     private Claims extractClaims(String token) {
         return Jwts.parser()
-                .verifyWith(getKey())
+                .verifyWith(key)
                 .build()
                 .parseSignedClaims(token)
                 .getPayload();
