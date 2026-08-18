@@ -6,6 +6,19 @@ spring:
     url: "${DATABASE_URL}"
     username: "${DATABASE_USER}"
     password: "${DATABASE_PASSWORD}"
+    hikari:
+      # Hikari domyślnie otwiera 10 połączeń OD RAZU (minimum-idle domyślnie równa się
+      # maximum-pool-size) i trzyma je otwarte. Baza po drugiej stronie ma swój limit
+      # równoległych połączeń i jest to limit CAŁEGO serwera, nie naszej aplikacji:
+      # zarządzane bazy z darmowych planów bywają przy tym ustawione bardzo nisko.
+      # Przekroczenie nie daje łagodnego objawu - aplikacja nie wstaje, a komunikat
+      # ("too many clients") leży kilka poziomów Caused by pod czymś, co wygląda jak
+      # błąd Liquibase albo Hibernate. Ta sama pułapka, którą profil testowy zamyka
+      # ustawieniem maximum-pool-size: 5 - tam wyczerpywały ją konteksty testowe.
+      #
+      # Domyślne 10 to dokładnie tyle, ile było wcześniej, więc samo dopisanie tej sekcji
+      # niczego nie zmienia - daje tylko pokrętło na wdrożenie, gdzie limit jest niższy.
+      maximum-pool-size: "${DB_POOL_SIZE:10}"
   jpa:
     show-sql: false
   mail:
@@ -47,6 +60,26 @@ app:
     # ochrony CSRF, bo SameSite przestaje być jakąkolwiek barierą. Token CSRF jest
     # włączony w SecurityConfig - te dwie rzeczy zmienia się wyłącznie razem.
     same-site: None
+
+  # Przypięte na sztywno, BEZ zmiennej środowiskowej, i to jest tu cała rzecz.
+  #
+  # W profilu bazowym obie mają wartości domyślne (storage.type=memory,
+  # translation.provider=echo) i są one tam poprawne: brak konfiguracji ma dawać
+  # działającą aplikację, a nie taką, która nie wstaje. Na produkcji ta sama
+  # życzliwość jest defektem, bo obie awarie są CICHE - wdrożenie, które zapomni
+  # zmiennej, wstaje i wygląda poprawnie, tyle że pliki użytkowników giną przy każdym
+  # restarcie (mapa w pamięci procesu), a "tłumaczenie" to atrapa doklejająca kod
+  # języka do każdej linii. Zmienna środowiskowa niczego by nie załatwiła: byłaby
+  # kolejną rzeczą do zapamiętania, a objawem pomyłki dalej byłby brak objawu.
+  #
+  # Fail-fast na brakujące sekrety JEST i nie trzeba go tu powtarzać: S3ClientConfig
+  # zatrzymuje start, gdy przy type=s3 brakuje bucketu albo kluczy, a
+  # DeepLTranslationProvider - gdy brakuje klucza API. Oba komunikaty nazywają
+  # brakujące ustawienie i żaden nie wypisuje wartości.
+  storage:
+    type: s3
+  translation:
+    provider: deepl
 
 management:
   endpoints:

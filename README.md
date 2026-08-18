@@ -427,8 +427,24 @@ uzasadnienie i warunki zmiany w `CLAUDE.md`, sekcja *Accepted trade-offs*.
 | `test` | PostgreSQL w kontenerze (`-Ph2`: H2 w pamięci) | w pliku testowym | — |
 
 Zmienne środowiskowe dla `prod`: `DATABASE_URL`, `DATABASE_USER`, `DATABASE_PASSWORD`,
-`JWT_SECRET`, `FRONTEND_URL`, `MAIL_HOST`, `MAIL_USERNAME`, `MAIL_PASSWORD`, `MAIL_FROM`
-oraz `STORAGE_*` przy magazynie S3.
+`JWT_SECRET`, `FRONTEND_URL`, `MAIL_HOST`, `MAIL_USERNAME`, `MAIL_PASSWORD`, `MAIL_FROM`,
+`STORAGE_BUCKET`, `STORAGE_ACCESS_KEY`, `STORAGE_SECRET_KEY`, `DEEPL_API_KEY`.
+Opcjonalnie: `STORAGE_ENDPOINT` (puste = prawdziwe AWS; MinIO i Cloudflare R2 wymagają adresu),
+`STORAGE_REGION`, `SERVER_PORT`, `MAIL_PORT`, `DB_POOL_SIZE`.
+
+Magazyn plików i dostawca tłumaczenia są na `prod` **przypięte na sztywno** (`app.storage.type=s3`,
+`app.translation.provider=deepl`) i nie da się ich przestawić zmienną. W profilu bazowym mają
+wartości domyślne `memory` i `echo` — poprawne tam, bo brak konfiguracji ma dawać działającą
+aplikację. Na produkcji obie awarie są **ciche**: wdrożenie wstaje i wygląda poprawnie, tyle że
+pliki użytkowników trzymane są w pamięci procesu i giną przy restarcie, a „tłumaczenie" to atrapa
+doklejająca kod języka do każdej linii. Brakujące sekrety zatrzymują start z nazwą brakującego
+ustawienia (`S3ClientConfig`, `DeepLTranslationProvider`).
+
+`DB_POOL_SIZE` (domyślnie 10, czyli tyle, ile ustawia samo Hikari) jest po to, że pula otwiera
+wszystkie połączenia od razu, a zarządzane bazy z darmowych planów mają niskie limity połączeń
+dla całego serwera. Objawem przekroczenia jest aplikacja, która nie wstaje, z komunikatem
+„too many clients" ukrytym kilka poziomów `Caused by` pod błędem wyglądającym na problem
+Liquibase albo Hibernate.
 
 `MAIL_FROM` celowo **nie ma wartości domyślnej na `prod`**: adres nadawcy to nie to samo co
 login do SMTP (u dostawców typu SES czy SendGrid login jest kluczem API albo użytkownikiem IAM),

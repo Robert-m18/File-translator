@@ -1,0 +1,44 @@
+# Nadpisanie compose'a do PRZEJŚCIA PROFILU prod LOKALNIE.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# To NIE jest plik wdrożeniowy. Na prawdziwym wdrożeniu zmienne wpisuje się w panelu
+# platformy, a baza, magazyn i SMTP są zewnętrzne. Tutaj zostają kontenery z podstawowego
+# docker-compose.yml (PostgreSQL, Mailpit, MinIO), zmienia się wyłącznie profil aplikacji.
+#
+# PO CO TO ISTNIEJE: profil prod nie był nigdy uruchomiony i miał trzy defekty, których
+# dev nie mógł pokazać - kontener nie wstawał (katalog na logi), logi nie szły na stdout,
+# a magazyn i dostawca tłumaczenia po cichu spadały na atrapy. Ten plik jest sposobem, żeby
+# sprawdzić start profilu bez zakładania konta u kogokolwiek.
+#
+# CZEGO TĄ DROGĄ NIE SPRAWDZISZ: LOGOWANIA. Profil prod wydaje ciasteczka Secure
+# + SameSite=None, a przeglądarka nie zapisze takiego ciasteczka z adresu http://,
+# curl go nie odeśle. Logowanie zwróci 200 i każde następne żądanie 401, bez błędu
+# gdziekolwiek. To nie jest usterka do naprawienia - to jest powód, dla którego pełne
+# przejście auth czeka na wdrożenie z prawdziwym https.
+
+services:
+
+  app:
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+
+      # Na prod te cztery nie mają wartości domyślnych i brak którejkolwiek zatrzymuje start.
+      # Sekret musi być base64 i po zdekodowaniu mieć co najmniej 32 bajty - patrz
+      # JwtUtil.getKey(), które robi Decoders.BASE64.decode(). Ten jest wygenerowany na
+      # potrzeby lokalnego przejścia i jest jawny świadomie, tak samo jak postgres/postgres
+      # i LokalnyAdmin1 w pliku podstawowym. Na wdrożeniu generuje się nowy.
+      JWT_SECRET: "IzgSB722HNqm7veH3mYRzxBGgaGlfnrJE2I/MvdtwoN1MsNGavYIed/dM6YVWMf5"
+
+      # Profil prod ma zaszyte smtp auth=true i starttls enable=true, więc login i hasło
+      # muszą być niepuste. Mailpit przyjmuje dowolne (MP_SMTP_AUTH_ACCEPT_ANY) i nie ogłasza
+      # STARTTLS-a, a "enable" - w odróżnieniu od "required" - jest oportunistyczne, więc
+      # rozmowa przechodzi otwartym tekstem.
+      MAIL_USERNAME: lokalny
+      MAIL_PASSWORD: lokalny
+      MAIL_FROM: no-reply@file-translator.local
+
+      # DEEPL_API_KEY leci z pliku podstawowego, który czyta je z .env - i na tym profilu
+      # jest OBOWIĄZKOWY. Profil prod przypina app.translation.provider=deepl na sztywno,
+      # więc bez klucza DeepLTranslationProvider zatrzyma start. To jest zachowanie docelowe:
+      # ciche zejście na atrapę byłoby gorsze niż niewstająca aplikacja.

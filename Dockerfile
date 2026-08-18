@@ -48,6 +48,20 @@ COPY --from=build --chown=spring:spring /build/extracted/spring-boot-loader/ ./
 COPY --from=build --chown=spring:spring /build/extracted/snapshot-dependencies/ ./
 COPY --from=build --chown=spring:spring /build/extracted/application/ ./
 
+# Katalog na logi i właściciel samego /app.
+#
+# WORKDIR wyżej tworzy /app jako ROOT, bo USER spring stoi dopiero pod spodem,
+# a COPY --chown zmienia właściciela KOPIOWANYCH wpisów, nie katalogu, do którego
+# trafiają. Profil prod pisze do logs/app.log, czyli ścieżki WZGLĘDNEJ - rozwiązuje
+# się względem /app, a użytkownik spring nie miał tam prawa zapisu.
+#
+# Objaw nie był łagodny: logback zgłasza wtedy "Failed to create parent directories",
+# a Spring Boot 4 podnosi błędy konfiguracji logowania do wyjątku ("Logback
+# configuration error detected"), więc kontener na profilu prod NIE WSTAWAŁ W OGÓLE.
+# Na dev problem nie występuje i dlatego był niewidoczny: żaden profil poza prod nie
+# ustawia logging.file.name, więc logback spada na ${java.io.tmpdir}/spring.log.
+RUN mkdir -p /app/logs && chown -R spring:spring /app
+
 USER spring
 EXPOSE 8080
 
