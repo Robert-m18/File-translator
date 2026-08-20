@@ -55,6 +55,19 @@
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-security</artifactId>
 		</dependency>
+		<!-- Logowanie kontem Google (authorization code flow po stronie serwera).
+		     Wciąga spring-security-oauth2-client, -core i -jose; ten ostatni weryfikuje
+		     podpis tokenu ID.
+
+		     UWAGA: bez skonfigurowanego klienta (spring.security.oauth2.client.registration.*)
+		     bean ClientRegistrationRepository w ogóle NIE POWSTAJE - dlatego SecurityConfig
+		     wpina oauth2Login warunkowo, przez ObjectProvider. Bezwarunkowe http.oauth2Login()
+		     wywaliłoby start aplikacji każdemu, kto nie ma konta w Google Cloud, czyli gołe
+		     ./mvnw spring-boot:run przestałoby działać. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-oauth2-client</artifactId>
+		</dependency>
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-webmvc</artifactId>

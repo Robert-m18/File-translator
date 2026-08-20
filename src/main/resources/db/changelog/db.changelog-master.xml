@@ -44,5 +44,6 @@
     <include file="db/changelog/changes/0011-translation-object-storage.xml"/>
     <include file="db/changelog/changes/0012-drop-translation-content.xml"/>
     <include file="db/changelog/changes/0013-translation-document-jobs.xml"/>
+    <include file="db/changelog/changes/0014-users-google-account.xml"/>
 
 </databaseChangeLog>

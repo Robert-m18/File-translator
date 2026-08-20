@@ -170,6 +170,11 @@ services:
       # płatne api.deepl.com - pomyłka daje 403 wyglądające jak zły klucz).
       TRANSLATION_PROVIDER: "${TRANSLATION_PROVIDER:-echo}"
       DEEPL_API_KEY: "${DEEPL_API_KEY:-}"
+      # Logowanie przez Google. Puste = wyłączone, z ostrzeżeniem WARN przy starcie
+      # (rejestracja i logowanie hasłem działają bez tego). Adres powrotny do wpisania
+      # w Google Cloud Console to http://localhost:8080/login/oauth2/code/google.
+      GOOGLE_CLIENT_ID: "${GOOGLE_CLIENT_ID:-}"
+      GOOGLE_CLIENT_SECRET: "${GOOGLE_CLIENT_SECRET:-}"
       ADMIN_ENABLED: "true"
       ADMIN_EMAIL: admin@file-translator.local
       ADMIN_PASSWORD: LokalnyAdmin1

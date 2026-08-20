@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+            http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <changeSet id="0014-01-users-google-sub" author="robert">
+        <preConditions onFail="MARK_RAN">
+            <not>
+                <columnExists tableName="users" columnName="google_sub"/>
+            </not>
+        </preConditions>
+
+        <!--
+            Identyfikator konta Google (roszczenie "sub" z tokenu ID).
+            NULL = konto nie jest powiązane z Google, czyli powstało przez rejestrację hasłem.
+
+            DLACZEGO "sub", A NIE ADRES EMAIL
+
+            Adres w koncie Google MOŻNA ZMIENIĆ, "sub" jest niezmienny przez całe życie konta.
+            Adres służy więc WYŁĄCZNIE do pierwszego skojarzenia (patrz niżej); od chwili
+            zapisania "sub" to on jest tożsamością. Gdyby pozostać przy adresie, zmiana maila
+            u Google odcinałaby użytkownika od jego konta w tej aplikacji, a w najgorszym
+            wariancie - gdyby ktoś inny przejął zwolniony adres - wpuszczałaby na nie obcego.
+
+            DLACZEGO UNIKALNY
+
+            Jedno konto Google ma prowadzić do co najwyżej jednego konta u nas. Bez unikatu
+            dwa wiersze mogłyby wskazywać na ten sam "sub" - a wtedy "zaloguj przez Google"
+            przestaje mieć jednoznaczną odpowiedź i wybór konta zależałby od kolejności
+            wierszy w zapytaniu. Unikat na kolumnie z NULL-ami jest bezpieczny: zarówno
+            PostgreSQL, jak i H2 dopuszczają dowolnie wiele NULL-i w unikalnym indeksie,
+            więc wszystkie konta hasłowe (a takie są dziś WSZYSTKIE) mieszczą się obok siebie.
+
+            DLACZEGO NIE MA KOLUMNY auth_provider
+
+            "google_sub IS NOT NULL" odpowiada na dokładnie to samo pytanie. Osobna kolumna
+            byłaby drugim źródłem prawdy o tym samym fakcie - czyli czymś, co da się rozjechać
+            (wiersz z auth_provider='GOOGLE' i pustym google_sub, albo odwrotnie), a niczego
+            nowego nie mówi.
+
+            DLACZEGO password ZOSTAJE NOT NULL
+
+            Konto założone przez Google dostaje BCrypt z losowego, natychmiast porzuconego
+            sekretu (GoogleAccountService). DaoAuthenticationProvider woła
+            passwordEncoder.matches(podane, getPassword()) i NULL w drugim argumencie to
+            zachowanie, na którym nie warto opierać bezpieczeństwa. Przy losowym hashu
+            logowanie hasłem na takie konto po prostu zawsze daje BAD_CREDENTIALS - czyli
+            dokładnie to, czego wymaga reguła "odpowiedzi nie zdradzają, które adresy są
+            zarejestrowane": użytkownik nie dowiaduje się, że to konto jest "od Google".
+            Kto zechce mieć jednak hasło, ma już właściwą drogę - POST /auth/forgot-password,
+            bo skrzynkę i tak kontroluje.
+
+            255 znaków: "sub" od Google to dziś ciąg ~21 cyfr, ale OIDC nie ogranicza go do
+            liczby ani do tej długości, a 255 to ta sama miara co dla kolumny email.
+
+            BEZ INDEKSU POZA UNIKATEM: unikat sam w sobie jest indeksem, a jedyne zapytanie
+            filtrujące po tej kolumnie (odnalezienie konta po "sub" przy logowaniu) trafia
+            dokładnie w niego.
+        -->
+        <addColumn tableName="users">
+            <column name="google_sub" type="VARCHAR(255)"/>
+        </addColumn>
+
+        <addUniqueConstraint tableName="users"
+                             columnNames="google_sub"
+                             constraintName="uk_users_google_sub"/>
+
+        <!--
+            Bez migracji danych. Wszystkie istniejące konta powstały przez rejestrację
+            hasłem, więc NULL jest dla nich wartością POPRAWNĄ, a nie brakującą. Powiązanie
+            dopisuje się przy pierwszym udanym logowaniu przez Google na ten sam adres.
+        -->
+    </changeSet>
+
+</databaseChangeLog>
