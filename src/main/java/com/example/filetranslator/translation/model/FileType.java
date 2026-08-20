@@ -23,7 +23,7 @@ import java.util.Optional;
  * - Dla .txt bajty to praktycznie znaki, więc limit da się WYPROWADZIĆ z ekonomii dostawcy.
  *   256 KB przy miesięcznym budżecie 500 tys. znaków na całe konto DeepL Free zostaje bez
  *   zmian - dwa takie pliki to już ponad połowa miesiąca dla wszystkich użytkowników razem.
- * - Dla PDF-a i XLSX-a takiej zależności NIE MA: liczba znaków jest nieznana, dopóki dostawca
+ * - Dla PDF-a, DOCX-a i XLSX-a takiej zależności NIE MA: liczba znaków jest nieznana, dopóki dostawca
  *   nie odeśle billed_characters. Limit bajtowy nie chroni więc budżetu, tylko OGRANICZA
  *   SZKODĘ z jednego pliku. 2 MB, czyli wyraźnie poniżej 10 MB, które dopuszcza DeepL -
  *   schodzimy niżej świadomie, bo u nas jeden dokument może jednorazowo przekroczyć dobowy
@@ -33,13 +33,15 @@ public enum FileType {
 
     TXT(".txt", "text/plain; charset=UTF-8", 256 * 1024, false),
     PDF(".pdf", "application/pdf", 2 * 1024 * 1024, true),
+    DOCX(".docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            2 * 1024 * 1024, true),
     XLSX(".xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             2 * 1024 * 1024, true);
 
     /** Sygnatura PDF-a: pierwsze bajty pliku to zawsze "%PDF-". */
     private static final byte[] PDF_MAGIC = {'%', 'P', 'D', 'F', '-'};
 
-    /** Sygnatura archiwum ZIP - a XLSX jest archiwum ZIP. */
+    /** Sygnatura archiwum ZIP - a XLSX i DOCX są archiwami ZIP. */
     private static final byte[] ZIP_MAGIC = {'P', 'K', 0x03, 0x04};
 
     private final String extension;
@@ -83,9 +85,16 @@ public enum FileType {
      * OGRANICZENIE, KTÓRE TRZEBA ZNAĆ: XLSX, DOCX i PPTX mają IDENTYCZNĄ sygnaturę, bo
      * wszystkie są archiwami ZIP. Odróżnienie ich wymaga otwarcia archiwum i zajrzenia do
      * środka - czyli dokładnie tego, czego nie robimy, żeby nie wpuścić sobie bomb
-     * dekompresyjnych. Dlatego dla archiwum ZIP decyduje rozszerzenie, a plik .docx przemianowany
-     * na .xlsx pojedzie do dostawcy i zostanie odrzucony po jego stronie jako niezgodny -
-     * błędem trwałym, nie naszą awarią.
+     * dekompresyjnych. Dlatego dla archiwum ZIP decyduje rozszerzenie.
+     *
+     * ODKĄD OBSŁUGIWANE SĄ DWA FORMATY ZIP-owe (XLSX i DOCX), ROZSZERZENIE JEST JEDYNĄ RZECZĄ,
+     * KTÓRA JE OD SIEBIE ODRÓŻNIA - i to jest cała cena decyzji o nieotwieraniu archiwów.
+     * Dopóki był tu jeden taki format, pomylenie się kończyło odrzuceniem pliku u nas. Teraz
+     * arkusz nazwany .docx przejdzie naszą kontrolę i pojedzie do dostawcy jako dokument
+     * Worda - odrzuci go dopiero on, błędem TRWAŁYM (retryable=false), więc zlecenie kończy
+     * się na pierwszej próbie i nie chodzi przez pełne wycofywanie. Objawem dla użytkownika
+     * jest komunikat od dostawcy, a nie nasza awaria - i tak ma być, bo to jego plik jest
+     * niezgodny z własną nazwą.
      *
      * @return typ albo pusty Optional, jeśli zawartość nie pasuje do żadnego obsługiwanego
      */
@@ -94,9 +103,16 @@ public enum FileType {
             return Optional.of(PDF);
         }
         if (startsWith(content, ZIP_MAGIC)) {
-            return filename.toLowerCase(Locale.ROOT).endsWith(XLSX.extension)
-                    ? Optional.of(XLSX)
-                    : Optional.empty();
+            String lower = filename.toLowerCase(Locale.ROOT);
+            if (lower.endsWith(XLSX.extension)) {
+                return Optional.of(XLSX);
+            }
+            if (lower.endsWith(DOCX.extension)) {
+                return Optional.of(DOCX);
+            }
+            // Każde inne archiwum (.zip, .pptx, .odt) odrzucamy. Lista dozwolonych, a nie
+            // "cokolwiek jest ZIP-em": bez tego dowolne archiwum poszłoby do dostawcy.
+            return Optional.empty();
         }
         // Tekst nie ma sygnatury - rozstrzyga go dopiero próba zdekodowania jako UTF-8,
         // którą robi UploadedFile. Tutaj mówimy tylko, że nie jest to żaden ze znanych binariów.

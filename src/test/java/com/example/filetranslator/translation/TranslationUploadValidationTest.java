@@ -149,7 +149,7 @@ class TranslationUploadValidationTest {
     }
 
     /**
-     * Archiwum ZIP, które nie nazywa się .xlsx, jest odrzucane - i to jest jedyne miejsce,
+     * Archiwum ZIP o nieobsługiwanej nazwie jest odrzucane - i to jest jedyne miejsce,
      * w którym o typie współdecyduje nazwa.
      *
      * Powód jest wprost zapisany w FileType: XLSX, DOCX i PPTX mają IDENTYCZNĄ sygnaturę, bo
@@ -157,17 +157,56 @@ class TranslationUploadValidationTest {
      * dokładnie tego, czego nie robimy, żeby nie wpuścić sobie bomb dekompresyjnych.
      */
     @Test
-    @DisplayName("Archiwum ZIP bez rozszerzenia .xlsx jest odrzucane")
-    void zipThatIsNotXlsx_shouldBeRejected() throws Exception {
-        byte[] zip = {'P', 'K', 0x03, 0x04, 0x14, 0x00, 0x00, 0x00};
-
+    @DisplayName("Archiwum ZIP o nieobsługiwanym rozszerzeniu jest odrzucane")
+    void zipWithUnsupportedExtension_shouldBeRejected() throws Exception {
         mockMvc.perform(multipart("/translations")
-                        .file(new MockMultipartFile("file", "archiwum.zip", "application/zip", zip))
+                        .file(new MockMultipartFile("file", "archiwum.zip", "application/zip", zipBytes()))
                         .param("targetLang", "EN_GB")
                         .cookie(accessToken)
                         .with(csrf()))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("UNSUPPORTED_FILE_TYPE"));
+    }
+
+    /** Ten sam ZIP co wyżej, tyle że nazwany .docx - przechodzi jako dokument Worda. */
+    @Test
+    @DisplayName("Archiwum ZIP z rozszerzeniem .docx jest przyjmowane")
+    void zipNamedDocx_shouldBeAccepted() throws Exception {
+        mockMvc.perform(multipart("/translations")
+                        .file(new MockMultipartFile("file", "umowa.docx",
+                                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                zipBytes()))
+                        .param("targetLang", "EN_GB")
+                        .cookie(accessToken)
+                        .with(csrf()))
+                .andExpect(status().isAccepted());
+    }
+
+    /**
+     * KONTROLA NEGATYWNA do testu wyżej i jedyny z tej trójki, który cokolwiek rozstrzyga.
+     *
+     * Dokładanie DOCX-a kusi, żeby gałąź ZIP-ową uprościć do "archiwum przechodzi" - bo obie
+     * pozostałe asercje przeszłyby wtedy tak samo. Ten test mówi, że lista jest ZAMKNIĘTA:
+     * .pptx ma identyczną sygnaturę i identyczne rozszerzenie co do długości, a mimo to ma
+     * odbić się u nas, a nie u dostawcy.
+     */
+    @Test
+    @DisplayName("Archiwum ZIP z rozszerzeniem .pptx nadal jest odrzucane")
+    void zipNamedPptx_shouldStillBeRejected() throws Exception {
+        mockMvc.perform(multipart("/translations")
+                        .file(new MockMultipartFile("file", "prezentacja.pptx",
+                                "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                                zipBytes()))
+                        .param("targetLang", "EN_GB")
+                        .cookie(accessToken)
+                        .with(csrf()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("UNSUPPORTED_FILE_TYPE"));
+    }
+
+    /** Minimalne bajty wyglądające jak archiwum ZIP - liczy się sygnatura, bo jej szuka FileType. */
+    private byte[] zipBytes() {
+        return new byte[]{'P', 'K', 0x03, 0x04, 0x14, 0x00, 0x00, 0x00};
     }
 
     /**
