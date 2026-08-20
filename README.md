@@ -6,7 +6,8 @@ z kompletnym uwierzytelnianiem i panelem administracyjnym.
 - **Tłumaczenie** — upload, kolejka zadań w bazie, worker w tle, deduplikacja po odcisku treści,
   pliki w magazynie obiektowym (S3/MinIO), powiadomienie mailem.
 - **Uwierzytelnianie** — rejestracja z potwierdzeniem adresu, logowanie na ciasteczkach `httpOnly`,
-  rotacja tokenów odświeżających z wykrywaniem kradzieży, blokada konta, reset hasła.
+  logowanie kontem Google (OAuth2/OIDC), rotacja tokenów odświeżających z wykrywaniem kradzieży,
+  blokada konta, reset hasła.
 - **Panel administracyjny** — lista i wyszukiwanie kont, blokowanie z powodem, wymuszone
   wylogowanie.
 
@@ -109,7 +110,7 @@ technicznych (`controllers/`, `services/`, `repositories/`):
 ```
 com.example.filetranslator
 ├── auth/            logowanie, sesje, rotacja tokenów, blokada konta, rejestracja
-│   ├── dto/  model/  repository/
+│   ├── dto/  model/  repository/  oauth2/     (oauth2/ = logowanie kontem Google)
 ├── user/            konto użytkownika, encja User (auth zależy od user, nigdy odwrotnie)
 │   ├── dto/  model/
 ├── admin/           panel: lista i wyszukiwanie kont, blokada, wymuszone wylogowanie
@@ -195,6 +196,45 @@ nie jest wysyłany przy każdym żądaniu do API.
 
 Access i refresh rozróżnia claim `type` (`access` / `refresh`), sprawdzany w `AuthService.refreshToken`.
 Każdy token ma losowy `jti`, więc dwa tokeny wydane w tej samej sekundzie nigdy nie są identyczne.
+
+### Logowanie kontem Google — nasza sesja, nie cudza
+
+Przepływ jest **serwerowy** (authorization code): SPA robi zwykłą nawigację pod
+`/oauth2/authorization/google`, Google odsyła przeglądarkę na `/login/oauth2/code/google`,
+a aplikacja wystawia **te same ciasteczka**, co `POST /auth/login`, i przekierowuje z powrotem
+na front. Sekret klienta nigdy nie opuszcza backendu, a front nie potrzebuje żadnego SDK Google —
+to jeden przycisk zmieniający `window.location`.
+
+**`OidcUser` nie zostaje zasadą uwierzytelnienia aplikacji.** Żyje wyłącznie przez czas obsługi
+powrotu z Google i zamienia się na naszą parę tokenów, zanim przeglądarka wróci na front. Dzięki
+temu `JwtFilter`, `GET /auth/me`, rotacja tokenów, wykrywanie kradzieży i wylogowanie działają dla
+konta Google bez ani jednej linijki napisanej osobno — i bez wydzielania zasady uwierzytelnienia
+z encji `User`.
+
+**Łączenie kont odbywa się po potwierdzonym adresie.** Google z `email_verified = true` dowodzi
+kontroli nad tą samą skrzynką, co kliknięcie w link potwierdzający przy rejestracji, więc konto
+założone hasłem i logowanie Google na ten sam adres to jedno konto — dopisujemy tylko `google_sub`.
+**Bez potwierdzonego adresu odmawiamy zawsze**: inaczej wystarczyłoby założyć konto Google na cudzy
+adres, żeby przejąć cudze konto. Tożsamością jest od tej chwili `sub`, a nie adres — adres w koncie
+Google można zmienić.
+
+**Blokada administracyjna jest sprawdzana osobno na tej ścieżce, bo OAuth2 omija
+`DaoAuthenticationProvider`** (a więc i `BlockedAccountChecker`). Bez tego zablokowany użytkownik
+dostawałby `423` przy logowaniu hasłem i wchodził bokiem przez Google. Sprawdzane jest `isBlocked()`,
+a **nie** `isAccountNonLocked()` — ta druga obejmuje też blokadę po nieudanych logowaniach, którą
+wywołać może każdy na każdym, więc byłaby gotowym narzędziem do odcinania dowolnego użytkownika
+od logowania Google.
+
+**Żądanie autoryzacyjne leży w ciasteczku, nie w sesji** — łańcuch jest bezsesyjny, więc domyślne
+repozytorium nie miałoby gdzie go odłożyć. Ciasteczko ma `SameSite=Lax` **przypięte na sztywno**:
+powrót z `accounts.google.com` to nawigacja międzywitrynowa, a przy `Strict` z profilu bazowego
+przeglądarka po prostu by go nie odesłała.
+
+Bez `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` cała ta gałąź jest **wyłączona**, a aplikacja mówi
+o tym `WARN`-em przy starcie — rejestracja i logowanie hasłem działają bez niej. Adres powrotny
+trzeba wpisać w Google Cloud Console co do znaku (`http://localhost:8080/login/oauth2/code/google`
+dla uruchomienia lokalnego); niezgodność odbija się po stronie Google i nie zostawia śladu
+w naszych logach.
 
 ### Sesje: rotacja tokenów z wykrywaniem kradzieży
 
@@ -315,6 +355,8 @@ Każdy błąd to `application/problem+json`:
 | POST | `/auth/logout` | publiczny | Unieważnia rodzinę tokenów i czyści ciasteczka |
 | POST | `/auth/forgot-password` | publiczny | Wysyła link resetu — identyczna odpowiedź dla adresu znanego i nieznanego |
 | POST | `/auth/reset-password` | token z maila | Ustawia nowe hasło, unieważnia wszystkie sesje |
+| GET | `/oauth2/authorization/google` | publiczny | Start logowania kontem Google (nawigacja przeglądarki, **nie** `fetch`) |
+| GET | `/login/oauth2/code/google` | publiczny | Adres powrotny od Google — wystawia te same ciasteczka co `/auth/login` |
 | POST | `/translations` | **zalogowany** | Zlecenie tłumaczenia (`.txt`, PDF, XLSX; `multipart/form-data`) — `202` z identyfikatorem |
 | GET | `/translations` | **zalogowany** | Lista **własnych** zleceń, stronicowana, bez treści plików |
 | GET | `/translations/{id}` | **właściciel** | Status zlecenia |
@@ -429,6 +471,10 @@ uzasadnienie i warunki zmiany w `CLAUDE.md`, sekcja *Accepted trade-offs*.
 Zmienne środowiskowe dla `prod`: `DATABASE_URL`, `DATABASE_USER`, `DATABASE_PASSWORD`,
 `JWT_SECRET`, `FRONTEND_URL`, `MAIL_HOST`, `MAIL_USERNAME`, `MAIL_PASSWORD`, `MAIL_FROM`,
 `STORAGE_BUCKET`, `STORAGE_ACCESS_KEY`, `STORAGE_SECRET_KEY`, `DEEPL_API_KEY`.
+
+`GOOGLE_CLIENT_ID` i `GOOGLE_CLIENT_SECRET` są **opcjonalne** na każdym profilu — bez nich
+logowanie kontem Google jest wyłączone (z ostrzeżeniem `WARN` przy starcie), a reszta
+uwierzytelniania działa bez zmian.
 Opcjonalnie: `STORAGE_ENDPOINT` (puste = prawdziwe AWS; MinIO i Cloudflare R2 wymagają adresu),
 `STORAGE_REGION`, `SERVER_PORT`, `MAIL_PORT`, `DB_POOL_SIZE`.
 

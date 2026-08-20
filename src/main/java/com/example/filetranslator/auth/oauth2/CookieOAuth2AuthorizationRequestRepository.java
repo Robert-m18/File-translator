@@ -1,0 +1,186 @@
+/*
+ * Copyright (c) 2026 Robert Moczygęba. Wszelkie prawa zastrzeżone.
+ * See LICENSE in project root for details.
+ */
+package com.example.filetranslator.auth.oauth2;
+
+import com.example.filetranslator.common.security.CookieProperties;
+import jakarta.servlet.http.Cookie;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.ResponseCookie;
+import org.springframework.security.oauth2.client.web.AuthorizationRequestRepository;
+import org.springframework.security.oauth2.core.endpoint.OAuth2AuthorizationRequest;
+import org.springframework.stereotype.Component;
+
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.ObjectInputFilter;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
+import java.time.Duration;
+import java.util.Arrays;
+import java.util.Base64;
+import java.util.Optional;
+
+/**
+ * Trzyma żądanie autoryzacyjne OAuth2 w CIASTECZKU, a nie w sesji HTTP.
+ *
+ * DLACZEGO W OGÓLE ISTNIEJE - bez tego logowanie przez Google w tej aplikacji NIE DZIAŁA.
+ * Domyślne HttpSessionOAuth2AuthorizationRequestRepository odkłada żądanie (razem
+ * z parametrem "state" i z "nonce") do sesji HTTP, a nasz łańcuch jest zbudowany jako
+ * SessionCreationPolicy.STATELESS - sesji po prostu nie ma. Powrót z Google kończy się
+ * wtedy błędem authorization_request_not_found, który wskazuje na Google i na konfigurację
+ * klienta OAuth2, czyli DOKŁADNIE NIE TAM, gdzie leży przyczyna.
+ *
+ * SameSite JEST TU PRZYPIĘTY NA "Lax" I NIE WOLNO GO BRAĆ Z CookieProperties.
+ * Profil bazowy ma tam "Strict" (${COOKIE_SAME_SITE:Strict}), a powrót z accounts.google.com
+ * to nawigacja MIĘDZYWITRYNOWA - przy Strict przeglądarka tego ciasteczka nie odeśle i całe
+ * logowanie wywala się identycznie jak wyżej. Na produkcji CookieProperties dają "None", więc
+ * tam by zadziałało; defekt byłby więc widoczny na devie i NIEWIDOCZNY na prodzie, czyli
+ * odwrotnie niż zwykle. To ciasteczko żyje kilka minut i jest jednorazowe, więc Lax jest
+ * właściwy na obu profilach i nie ma powodu, żeby zależał od środowiska.
+ *
+ * Secure - odwrotnie - idzie Z KONFIGURACJI: na produkcji ciasteczko ma latać wyłącznie
+ * po HTTPS, a na localhoście po http, bo inaczej przeglądarka je odrzuci. SameSite=Lax
+ * nie wymaga Secure (wymaga go dopiero None), więc te dwie decyzje się nie zazębiają.
+ *
+ * DESERIALIZACJA JEST OGRANICZONA FILTREM I TO NIE JEST OZDOBA. Treść ciasteczka przychodzi
+ * od klienta, więc przywracanie z niej dowolnego obiektu Javy otwierałoby drogę na gadżety
+ * deserializacyjne z classpatha (a jest tu Hibernate, Jackson i cały Spring). ObjectInputFilter
+ * przepuszcza wyłącznie klasy potrzebne do odtworzenia tego jednego typu i odrzuca resztę,
+ * a limity głębokości i liczby referencji zamykają wariant "mała treść, ogromny graf".
+ */
+@Slf4j
+@Component
+@RequiredArgsConstructor
+public class CookieOAuth2AuthorizationRequestRepository
+        implements AuthorizationRequestRepository<OAuth2AuthorizationRequest> {
+
+    static final String COOKIE_NAME = "oauth2_auth_request";
+
+    /**
+     * Tyle czasu ma użytkownik na ekran zgody Google. Krótko, bo to ciasteczko niesie
+     * "state" - jedyną ochronę przed podrzuceniem cudzego logowania - a wygasłe żądanie
+     * i tak da się rozpocząć od nowa jednym kliknięciem.
+     */
+    private static final Duration MAX_AGE = Duration.ofMinutes(3);
+
+    private static final ObjectInputFilter DESERIALIZATION_FILTER = ObjectInputFilter.Config.createFilter(
+            "maxdepth=20;maxrefs=512;maxarray=64;"
+                    + "org.springframework.security.oauth2.core.endpoint.OAuth2AuthorizationRequest;"
+                    + "org.springframework.security.oauth2.core.AuthorizationGrantType;"
+                    + "org.springframework.security.oauth2.core.endpoint.OAuth2AuthorizationResponseType;"
+                    + "java.util.*;java.lang.*;"
+                    + "!*");
+
+    private final CookieProperties cookieProperties;
+
+    @Override
+    public OAuth2AuthorizationRequest loadAuthorizationRequest(HttpServletRequest request) {
+        return readCookie(request).flatMap(this::deserialize).orElse(null);
+    }
+
+    @Override
+    public void saveAuthorizationRequest(OAuth2AuthorizationRequest authorizationRequest,
+                                         HttpServletRequest request,
+                                         HttpServletResponse response) {
+        // null = Spring Security prosi o usunięcie żądania (np. przy ponownym starcie
+        // przepływu). Kontrakt interfejsu, nie przypadek brzegowy.
+        if (authorizationRequest == null) {
+            clear(response);
+            return;
+        }
+        response.addHeader(HttpHeaders.SET_COOKIE, cookie(serialize(authorizationRequest), MAX_AGE).toString());
+    }
+
+    /**
+     * Zdejmuje żądanie i KASUJE ciasteczko przy okazji.
+     *
+     * Kasowanie jest tutaj, a nie w obsłudze sukcesu, bo ta metoda jest wołana na obu
+     * zakończeniach przepływu - udanym i nieudanym. Gdyby ciasteczko zostawało, kolejna
+     * próba logowania startowałaby z cudzym "state" i odbijała się bez zrozumiałego powodu.
+     */
+    @Override
+    public OAuth2AuthorizationRequest removeAuthorizationRequest(HttpServletRequest request,
+                                                                 HttpServletResponse response) {
+        OAuth2AuthorizationRequest authorizationRequest = loadAuthorizationRequest(request);
+        clear(response);
+        return authorizationRequest;
+    }
+
+    private void clear(HttpServletResponse response) {
+        response.addHeader(HttpHeaders.SET_COOKIE, cookie("", Duration.ZERO).toString());
+    }
+
+    /**
+     * Kasowanie ciasteczka to to samo ciasteczko z maxAge=0 - musi mieć identyczną nazwę,
+     * ścieżkę i atrybuty, inaczej przeglądarka uzna je za inne i starego nie usunie.
+     * Ta sama zasada co w CookieService.build.
+     */
+    private ResponseCookie cookie(String value, Duration maxAge) {
+        return ResponseCookie.from(COOKIE_NAME, value)
+                .httpOnly(true)
+                .secure(cookieProperties.secure())
+                .sameSite("Lax")
+                .path("/")
+                .maxAge(maxAge)
+                .build();
+    }
+
+    private Optional<String> readCookie(HttpServletRequest request) {
+        Cookie[] cookies = request.getCookies();
+        if (cookies == null) {
+            return Optional.empty();
+        }
+        return Arrays.stream(cookies)
+                .filter(cookie -> COOKIE_NAME.equals(cookie.getName()))
+                .map(Cookie::getValue)
+                .filter(value -> value != null && !value.isBlank())
+                .findFirst();
+    }
+
+    private String serialize(OAuth2AuthorizationRequest authorizationRequest) {
+        try (ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+             ObjectOutputStream out = new ObjectOutputStream(bytes)) {
+            out.writeObject(authorizationRequest);
+            out.flush();
+            return Base64.getUrlEncoder().encodeToString(bytes.toByteArray());
+        } catch (IOException e) {
+            // Nie da się tego sensownie obsłużyć: bez zapisanego żądania przepływ i tak
+            // padnie przy powrocie, więc lepiej zawalić od razu, w miejscu przyczyny.
+            throw new IllegalStateException("Nie udało się zapisać żądania autoryzacyjnego OAuth2", e);
+        }
+    }
+
+    /**
+     * Zwraca pusty Optional dla KAŻDEJ nieprawidłowej treści - uszkodzonej, obcej,
+     * wygasłej czy odrzuconej przez filtr.
+     *
+     * Świadomie bez rzucania wyjątkiem: to jest wejście sterowane przez klienta i jedyna
+     * sensowna reakcja na śmieci w ciasteczku to potraktowanie ich jak braku ciasteczka.
+     * Spring Security odpowie wtedy swoim authorization_request_not_found, czyli tak samo,
+     * jak gdyby użytkownik po prostu wszedł na adres powrotny z palca.
+     */
+    private Optional<OAuth2AuthorizationRequest> deserialize(String value) {
+        try {
+            byte[] decoded = Base64.getUrlDecoder().decode(value);
+            try (ObjectInputStream in = new ObjectInputStream(new ByteArrayInputStream(decoded))) {
+                in.setObjectInputFilter(DESERIALIZATION_FILTER);
+                Object object = in.readObject();
+                return object instanceof OAuth2AuthorizationRequest authorizationRequest
+                        ? Optional.of(authorizationRequest)
+                        : Optional.empty();
+            }
+        } catch (IllegalArgumentException | IOException | ClassNotFoundException e) {
+            // Bez adresu i bez treści ciasteczka w logu - to jest ścieżka logowania.
+            log.debug("Odrzucono nieprawidłowe ciasteczko żądania autoryzacyjnego OAuth2: {}",
+                    e.getClass().getSimpleName());
+            return Optional.empty();
+        }
+    }
+}

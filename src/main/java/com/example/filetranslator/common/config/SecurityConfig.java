@@ -4,6 +4,10 @@
  */
 package com.example.filetranslator.common.config;
 
+import com.example.filetranslator.auth.oauth2.CookieOAuth2AuthorizationRequestRepository;
+import com.example.filetranslator.auth.oauth2.GoogleOAuth2FailureHandler;
+import com.example.filetranslator.auth.oauth2.GoogleOAuth2SuccessHandler;
+import com.example.filetranslator.auth.oauth2.GoogleOidcUserService;
 import com.example.filetranslator.common.security.BlockedAccountChecker;
 import com.example.filetranslator.common.security.CookieProperties;
 import com.example.filetranslator.common.security.JwtFilter;
@@ -16,6 +20,8 @@ import com.example.filetranslator.common.security.RateLimitFilter;
 import com.example.filetranslator.common.security.RateLimitProperties;
 import com.example.filetranslator.common.security.ratelimit.BucketProvider;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.ApplicationEventPublisher;
@@ -32,6 +38,7 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.access.ExceptionTranslationFilter;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
@@ -45,12 +52,22 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import java.util.Arrays;
 import java.util.List;
 
+@Slf4j
 @Configuration
 @RequiredArgsConstructor
 public class SecurityConfig {
 
     private static final String[] PUBLIC_ENDPOINTS = {
             "/auth/**",
+            /*
+             * Logowanie przez Google: /oauth2/authorization/{id} rozpoczyna przepływ,
+             * /login/oauth2/code/{id} jest adresem powrotnym od dostawcy. Obie ścieżki
+             * MUSZĄ być publiczne - to na nich użytkownik dopiero się uwierzytelnia.
+             * Bez tego wpadają na anyRequest().authenticated() i kończą się 401,
+             * czyli logowanie wymagałoby bycia zalogowanym.
+             */
+            "/oauth2/**",
+            "/login/oauth2/**",
             // Dokumentacja API. Na profilu prod springdoc jest wyłączony w application-prod.yml,
             // więc te ścieżki po prostu nie istnieją.
             "/v3/api-docs/**",
@@ -142,10 +159,62 @@ public class SecurityConfig {
         return repository;
     }
 
+    /**
+     * Wpina logowanie przez Google - ale TYLKO wtedy, gdy klient OAuth2 jest skonfigurowany.
+     *
+     * Bez spring.security.oauth2.client.registration.* bean ClientRegistrationRepository
+     * w ogóle nie powstaje, a bezwarunkowe http.oauth2Login() WYWALIŁOBY START APLIKACJI.
+     * Znaczyłoby to, że gołe ./mvnw spring-boot:run przestaje działać każdemu, kto nie ma
+     * konta w Google Cloud - a to ta sama zasada, dla której domyślnym dostawcą tłumaczenia
+     * jest atrapa "echo", a nie DeepL: brak konfiguracji ma dawać działającą aplikację
+     * z mniejszą liczbą funkcji, a nie aplikację martwą.
+     *
+     * Przy braku klienta leci WARN, dokładnie jak w EchoTranslationProvider. Cicha nieobecność
+     * funkcji to ten sam tryb awarii, który w tym projekcie kosztował już godzinę przy
+     * TRANSLATION_PROVIDER: aplikacja wstaje, wygląda zdrowo i po prostu nie robi tego,
+     * czego się po niej spodziewano.
+     *
+     * CSRF nie wymaga tu żadnego wyjątku: obie ścieżki OAuth2 to GET, a CsrfFilter obejmuje
+     * wyłącznie metody zmieniające stan.
+     */
+    private void configureGoogleLogin(HttpSecurity http,
+                                      ObjectProvider<ClientRegistrationRepository> clientRegistrations,
+                                      GoogleOidcUserService oidcUserService,
+                                      GoogleOAuth2SuccessHandler successHandler,
+                                      GoogleOAuth2FailureHandler failureHandler,
+                                      CookieOAuth2AuthorizationRequestRepository authorizationRequestRepository)
+            throws Exception {
+
+        if (clientRegistrations.getIfAvailable() == null) {
+            log.warn("Logowanie przez Google jest WYŁĄCZONE - brak konfiguracji klienta OAuth2. "
+                    + "Ustaw GOOGLE_CLIENT_ID i GOOGLE_CLIENT_SECRET, żeby je włączyć.");
+            return;
+        }
+
+        http.oauth2Login(oauth2 -> oauth2
+                // Żądanie autoryzacyjne w ciasteczku, nie w sesji - łańcuch jest STATELESS,
+                // więc domyślne repozytorium sesyjne nie miałoby gdzie go odłożyć.
+                // Pełne uzasadnienie i pułapka z SameSite: w samej klasie repozytorium.
+                .authorizationEndpoint(endpoint -> endpoint
+                        .authorizationRequestRepository(authorizationRequestRepository))
+                // Kontrole (potwierdzony adres, blokada konta) siedzą w serwisie, a nie
+                // w handlerze sukcesu: tylko stamtąd da się ODMÓWIĆ tak, żeby odmowa
+                // trafiła do handlera porażki.
+                .userInfoEndpoint(endpoint -> endpoint.oidcUserService(oidcUserService))
+                .successHandler(successHandler)
+                .failureHandler(failureHandler));
+    }
+
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http,
                                            JwtFilter jwtFilter,
-                                           RateLimitFilter rateLimitFilter) throws Exception {
+                                           RateLimitFilter rateLimitFilter,
+                                           ObjectProvider<ClientRegistrationRepository> clientRegistrations,
+                                           GoogleOidcUserService oidcUserService,
+                                           GoogleOAuth2SuccessHandler oauth2SuccessHandler,
+                                           GoogleOAuth2FailureHandler oauth2FailureHandler,
+                                           CookieOAuth2AuthorizationRequestRepository authorizationRequestRepository)
+            throws Exception {
         CsrfTokenRequestAttributeHandler csrfRequestHandler = new CsrfTokenRequestAttributeHandler();
         csrfRequestHandler.setCsrfRequestAttributeName(null);
 
@@ -240,6 +309,9 @@ public class SecurityConfig {
                  * przez CSRF również zużywają żetony z kubełka.
                  */
                 .addFilterAfter(rateLimitFilter, CorsFilter.class);
+
+        configureGoogleLogin(http, clientRegistrations, oidcUserService,
+                oauth2SuccessHandler, oauth2FailureHandler, authorizationRequestRepository);
 
         return http.build();
     }

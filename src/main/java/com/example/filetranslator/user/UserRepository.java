@@ -27,6 +27,15 @@ public interface UserRepository extends JpaRepository<User, Long> {
 
     boolean existsByEmail(String email);
 
+    /**
+     * Konto powiązane z danym kontem Google (roszczenie "sub" z tokenu ID).
+     *
+     * Pytamy najpierw o to, a dopiero potem o adres - bo "sub" jest tożsamością, a adres
+     * tylko sposobem pierwszego skojarzenia. Adres w koncie Google da się zmienić, więc
+     * odwrotna kolejność odcinałaby użytkownika od jego konta po takiej zmianie.
+     */
+    Optional<User> findByGoogleSub(String googleSub);
+
     /*
      * Liczniki nieudanych logowań aktualizujemy zapytaniem UPDATE, a nie przez
      * wczytanie encji, zmianę pola i zapis. Powód: dwa równoległe nieudane logowania

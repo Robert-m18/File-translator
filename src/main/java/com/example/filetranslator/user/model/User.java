@@ -76,6 +76,19 @@ public class User implements UserDetails {
     private String blockedReason;
 
     /**
+     * Identyfikator konta Google (roszczenie "sub"). NULL = konto założone hasłem.
+     *
+     * Tożsamością jest "sub", a NIE adres email: adres w koncie Google da się zmienić,
+     * "sub" nie. Adres służy wyłącznie do pierwszego skojarzenia kont - potem liczy się
+     * już tylko ta kolumna. Pełne uzasadnienie w changesecie 0014-users-google-account.xml.
+     *
+     * Konto z wypełnionym google_sub NADAL ma hash hasła (losowy, porzucony), więc nie ma
+     * tu stanu "użytkownik bez hasła" do obsłużenia nigdzie indziej w kodzie.
+     */
+    @Column(name = "google_sub", unique = true, length = 255)
+    private String googleSub;
+
+    /**
      * Data założenia konta, ustawiana przez Hibernate przy pierwszym zapisie.
      *
      * Nie jest tu dla statystyk - to po niej ExpiredTokenCleanupJob poznaje konta
