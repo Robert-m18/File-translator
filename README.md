@@ -232,7 +232,7 @@ przeglądarka po prostu by go nie odesłała.
 
 Bez `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` cała ta gałąź jest **wyłączona**, a aplikacja mówi
 o tym `WARN`-em przy starcie — rejestracja i logowanie hasłem działają bez niej. Adres powrotny
-trzeba wpisać w Google Cloud Console co do znaku (`http://localhost:8080/login/oauth2/code/google`
+trzeba wpisać w Google Cloud Console co do znaku (`http://localhost:2009/login/oauth2/code/google`
 dla uruchomienia lokalnego); niezgodność odbija się po stronie Google i nie zostawia śladu
 w naszych logach.
 

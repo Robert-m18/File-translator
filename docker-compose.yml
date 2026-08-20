@@ -172,7 +172,7 @@ services:
       DEEPL_API_KEY: "${DEEPL_API_KEY:-}"
       # Logowanie przez Google. Puste = wyłączone, z ostrzeżeniem WARN przy starcie
       # (rejestracja i logowanie hasłem działają bez tego). Adres powrotny do wpisania
-      # w Google Cloud Console to http://localhost:8080/login/oauth2/code/google.
+      # w Google Cloud Console to http://localhost:2009/login/oauth2/code/google.
       GOOGLE_CLIENT_ID: "${GOOGLE_CLIENT_ID:-}"
       GOOGLE_CLIENT_SECRET: "${GOOGLE_CLIENT_SECRET:-}"
       ADMIN_ENABLED: "true"
