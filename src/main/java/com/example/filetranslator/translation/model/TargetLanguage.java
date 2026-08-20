@@ -30,6 +30,7 @@ public enum TargetLanguage {
     FR("FR"),
     ES("ES"),
     IT("IT"),
+    DA("DA"),
     PL("PL");
 
     /** Kod w formacie oczekiwanym przez API dostawcy (DeepL: "EN-GB", nie "EN_GB"). */
