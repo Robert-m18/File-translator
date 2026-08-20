@@ -7,27 +7,6 @@ spring:
     name: file-translator
   profiles:
     active: "${SPRING_PROFILES_ACTIVE:dev}"
-  security:
-    oauth2:
-      client:
-        registration:
-          google:
-            # PUSTE WARTOŚCI DOMYŚLNE, a nie "${VAR}" bez wartości - i to jest świadome.
-            # Przy pustych identyfikatorach Spring Boot NIE tworzy beana
-            # ClientRegistrationRepository, a SecurityConfig wpina wtedy logowanie Google
-            # warunkowo i wypisuje WARN. Wariant fail-fast byłby tu zły: wywalałby start
-            # aplikacji każdemu, kto po prostu nie chce logowania przez Google, czyli gołe
-            # ./mvnw spring-boot:run przestałoby działać. Ta sama zasada, dla której
-            # domyślnym dostawcą tłumaczenia jest atrapa "echo".
-            client-id: "${GOOGLE_CLIENT_ID:}"
-            client-secret: "${GOOGLE_CLIENT_SECRET:}"
-            # openid daje "sub", email daje adres RAZEM z email_verified (bez którego
-            # nie wpuszczamy nikogo), profile daje nazwę do wyświetlenia. Nic ponadto -
-            # zakres, o który się nie prosi, nie może wyciec.
-            scope:
-              - openid
-              - email
-              - profile
   task:
     scheduling:
       # Domyślnie harmonogram ma JEDEN wątek, a mamy pięć zadań: trzy nocne sprzątania
@@ -93,6 +72,20 @@ app:
   # originem używanym też przez CORS i przy sklejaniu linków w mailach. Sklejenie obu
   # w jedno oznaczałoby, że zmiana trasy logowania na froncie rusza konfigurację CORS.
   oauth2:
+    # Dane klienta z Google Cloud Console. PUSTE = logowanie przez Google wyłączone,
+    # z ostrzeżeniem WARN przy starcie; reszta uwierzytelniania działa bez zmian.
+    #
+    # ŚWIADOMIE POD app.oauth2, A NIE POD spring.security.oauth2.client.registration.
+    # Tamten zapis WYWALAŁ START APLIKACJI przy pustych wartościach i nie ma sposobu, żeby
+    # tego uniknąć w samym yml-u: zadeklarowana rejestracja z pustym client-id jest dla
+    # Springa rejestracją BŁĘDNĄ, a nie nieobecną, i OAuth2ClientProperties.validate()
+    # rzuca "Client id of registration 'google' must not be empty" (awaria 2026-08-20,
+    # kontener nie wstawał). Rejestrację buduje więc GoogleClientRegistrationConfig,
+    # który powstaje tylko wtedy, gdy obie wartości są niepuste.
+    google:
+      client-id: "${GOOGLE_CLIENT_ID:}"
+      client-secret: "${GOOGLE_CLIENT_SECRET:}"
+
     # /dashboard, a nie "/", żeby trafić tam, gdzie ląduje logowanie hasłem
     # (Login.jsx: navigate('/dashboard')). "/" też by zadziałało - RequireAnonymous
     # odesłałoby zalogowanego dalej - ale kosztem dodatkowego przekierowania.
