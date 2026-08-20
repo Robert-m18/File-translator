@@ -93,10 +93,19 @@ app:
   # originem używanym też przez CORS i przy sklejaniu linków w mailach. Sklejenie obu
   # w jedno oznaczałoby, że zmiana trasy logowania na froncie rusza konfigurację CORS.
   oauth2:
-    success-path: /
+    # /dashboard, a nie "/", żeby trafić tam, gdzie ląduje logowanie hasłem
+    # (Login.jsx: navigate('/dashboard')). "/" też by zadziałało - RequireAnonymous
+    # odesłałoby zalogowanego dalej - ale kosztem dodatkowego przekierowania.
+    success-path: /dashboard
     # Do tej trasy doklejany jest parametr error= z kodem odmowy
     # (GOOGLE_EMAIL_NOT_VERIFIED, ACCOUNT_BLOCKED, GOOGLE_AUTH_FAILED).
-    failure-path: /login
+    #
+    # "/", a NIE "/login" - ekran logowania stoi we froncie pod adresem głównym i trasy
+    # /login TAM NIE MA. Nieistniejący adres wpada w <Route path="*"> z przekierowaniem
+    # na "/", które NIE PRZENOSI query stringa, więc parametr error= przepadłby po drodze:
+    # użytkownik zobaczyłby zwykły ekran logowania bez słowa wyjaśnienia, a odmowa
+    # (np. konto zablokowane) wyglądałaby na to, że "przycisk nic nie robi".
+    failure-path: /
 
   mail:
     # Adres w nagłówku From i w kopercie SMTP. Osobne ustawienie, bo login do serwera
