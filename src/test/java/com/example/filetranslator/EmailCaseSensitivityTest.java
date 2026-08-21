@@ -21,7 +21,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Regresja na przejście z MySQL-a na PostgreSQL.
+ * Test pilnuje porównywania adresów bez rozróżniania wielkości liter.
  *
  * MySQL przy domyślnym collation porównywał teksty BEZ rozróżniania wielkości liter,
  * więc zapytanie o "Robert@Example.com" znajdowało wiersz zapisany małymi literami.

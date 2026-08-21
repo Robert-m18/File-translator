@@ -11,7 +11,7 @@ package com.example.filetranslator.translation.dto;
  * realizuje się jednym serwerowym CopyObject, więc bajty w ogóle nie przechodzą przez
  * aplikację. Wersja z treścią musiałaby je pobrać i odesłać z powrotem do magazynu.
  *
- * Kopiujemy, a nie wskazujemy dwoma zleceniami na jeden obiekt: wyłączność zlecenia na swój
+ * Wynik jest kopiowany, a nie współdzielony przez dwa zlecenia: wyłączność zlecenia na swój
  * prefiks jest tym, co pozwala kasować je jednym wywołaniem, bez liczenia referencji.
  *
  * sourceLang jedzie razem celowo. To dostawca go wykrył przy pierwszym tłumaczeniu, a treść

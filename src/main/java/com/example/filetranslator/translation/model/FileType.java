@@ -8,26 +8,25 @@ import java.util.Locale;
 import java.util.Optional;
 
 /**
- * Obsługiwane formaty plików - zamknięty zbiór, z którego bierze się rozszerzenie klucza
+ * Obsługiwane formaty plików - zamknięty zbiór, z którego pochodzi rozszerzenie klucza
  * w magazynie, typ treści odpowiedzi, limit rozmiaru i sposób tłumaczenia.
  *
- * DWIE ŚCIEŻKI TŁUMACZENIA. Tekst idzie zwykłym API tłumaczącym łańcuch znaków: jest
- * synchroniczne, tańsze i pokryte testami od początku. Formaty binarne idą DOKUMENTOWYM API
- * dostawcy, bo wyciąganie tekstu z PDF-a i składanie go z powrotem gubi układ - użytkownik
- * dostałby plik .txt zamiast przetłumaczonego dokumentu. Konsekwencja uboczna, którą warto
- * znać: skoro NIE otwieramy tych plików, bomby dekompresyjne (XLSX to ZIP) nie są naszą
- * ekspozycją. Wracają w chwili, w której ktoś sięgnie po PDFBox albo POI.
+ * Istnieją dwie ścieżki tłumaczenia. Tekst idzie interfejsem tłumaczącym łańcuch znaków: jest
+ * synchroniczny i tańszy. Formaty binarne idą interfejsem dokumentowym dostawcy, ponieważ
+ * wyciąganie tekstu z dokumentu i składanie go z powrotem gubi układ - użytkownik dostałby plik
+ * tekstowy zamiast przetłumaczonego dokumentu. Ubocznym skutkiem nieotwierania tych plików jest
+ * korzyść bezpieczeństwa: formaty spakowane przechodzą przez aplikację jako nieprzezroczyste
+ * bajty, więc bomby dekompresyjne nie są tu zagrożeniem.
  *
- * LIMITY ROZMIARU SĄ RÓŻNE DLA TEKSTU I DLA BINARIÓW, i to nie jest niekonsekwencja:
+ * Limity rozmiaru różnią się między tekstem a formatami binarnymi i nie jest to niekonsekwencja:
  *
- * - Dla .txt bajty to praktycznie znaki, więc limit da się WYPROWADZIĆ z ekonomii dostawcy.
- *   256 KB przy miesięcznym budżecie 500 tys. znaków na całe konto DeepL Free zostaje bez
- *   zmian - dwa takie pliki to już ponad połowa miesiąca dla wszystkich użytkowników razem.
- * - Dla PDF-a, DOCX-a i XLSX-a takiej zależności NIE MA: liczba znaków jest nieznana, dopóki dostawca
- *   nie odeśle billed_characters. Limit bajtowy nie chroni więc budżetu, tylko OGRANICZA
- *   SZKODĘ z jednego pliku. 2 MB, czyli wyraźnie poniżej 10 MB, które dopuszcza DeepL -
- *   schodzimy niżej świadomie, bo u nas jeden dokument może jednorazowo przekroczyć dobowy
- *   limit znaków użytkownika (sprawdzić da się dopiero wstecz, po fakcie).
+ * - Dla pliku tekstowego bajty odpowiadają praktycznie znakom, więc limit da się wyprowadzić
+ *   z ekonomii dostawcy, u którego rozlicza się właśnie znaki.
+ * - Dla dokumentów takiej zależności nie ma: liczba znaków pozostaje nieznana, dopóki dostawca
+ *   nie odeśle rozliczenia. Limit bajtowy nie chroni więc budżetu, tylko ogranicza szkodę
+ *   z pojedynczego pliku, i jest wyraźnie niższy niż limit dopuszczany przez dostawcę - bo jeden
+ *   dokument może jednorazowo przekroczyć dobowy limit znaków użytkownika, który da się sprawdzić
+ *   dopiero po fakcie.
  */
 public enum FileType {
 
@@ -38,10 +37,10 @@ public enum FileType {
     XLSX(".xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             2 * 1024 * 1024, true);
 
-    /** Sygnatura PDF-a: pierwsze bajty pliku to zawsze "%PDF-". */
+    /** Sygnatura dokumentu PDF - pierwsze bajty pliku. */
     private static final byte[] PDF_MAGIC = {'%', 'P', 'D', 'F', '-'};
 
-    /** Sygnatura archiwum ZIP - a XLSX i DOCX są archiwami ZIP. */
+    /** Sygnatura archiwum ZIP; formaty pakietu Office są archiwami ZIP. */
     private static final byte[] ZIP_MAGIC = {'P', 'K', 0x03, 0x04};
 
     private final String extension;
@@ -68,35 +67,29 @@ public enum FileType {
         return maxBytes;
     }
 
-    /** Czy tłumaczy się dokumentowym API dostawcy (zamiast zwykłym, tekstowym). */
+    /** Czy format tłumaczy się dokumentowym interfejsem dostawcy zamiast tekstowym. */
     public boolean usesDocumentApi() {
         return document;
     }
 
     /**
-     * Rozpoznaje typ po ZAWARTOŚCI, a nie po rozszerzeniu ani po nagłówku Content-Type.
+     * Rozpoznaje typ pliku po zawartości, a nie po rozszerzeniu ani nagłówku typu treści.
      *
-     * Rozszerzenie i Content-Type ustawia klient i można w nich napisać cokolwiek - to jest
-     * cała różnica między "plik nazywa się .pdf" a "plik JEST PDF-em". Poprzednia wersja
-     * (UploadedTextFile) świadomie tego nie robiła, bo przy jednym formacie tekstowym
-     * dekodowanie UTF-8 samo w sobie było kontrolą zawartości. Przy binariach ta kontrola
-     * znika i trzeba ją zastąpić sygnaturą.
+     * Rozszerzenie i typ treści ustawia klient i może w nich podać cokolwiek - na tym polega
+     * różnica między "plik nazywa się dokumentem" a "plik jest dokumentem". Rozpoznanie po
+     * sygnaturze sprawia, że plik binarny nie przejdzie ścieżką tekstową ani odwrotnie.
      *
-     * OGRANICZENIE, KTÓRE TRZEBA ZNAĆ: XLSX, DOCX i PPTX mają IDENTYCZNĄ sygnaturę, bo
-     * wszystkie są archiwami ZIP. Odróżnienie ich wymaga otwarcia archiwum i zajrzenia do
-     * środka - czyli dokładnie tego, czego nie robimy, żeby nie wpuścić sobie bomb
-     * dekompresyjnych. Dlatego dla archiwum ZIP decyduje rozszerzenie.
+     * Ograniczenie, które trzeba znać: formaty pakietu Office mają identyczną sygnaturę, bo
+     * wszystkie są archiwami ZIP. Odróżnienie ich wymagałoby otwarcia archiwum, czego ta klasa
+     * świadomie unika, dlatego dla archiwum decyduje rozszerzenie.
      *
-     * ODKĄD OBSŁUGIWANE SĄ DWA FORMATY ZIP-owe (XLSX i DOCX), ROZSZERZENIE JEST JEDYNĄ RZECZĄ,
-     * KTÓRA JE OD SIEBIE ODRÓŻNIA - i to jest cała cena decyzji o nieotwieraniu archiwów.
-     * Dopóki był tu jeden taki format, pomylenie się kończyło odrzuceniem pliku u nas. Teraz
-     * arkusz nazwany .docx przejdzie naszą kontrolę i pojedzie do dostawcy jako dokument
-     * Worda - odrzuci go dopiero on, błędem TRWAŁYM (retryable=false), więc zlecenie kończy
-     * się na pierwszej próbie i nie chodzi przez pełne wycofywanie. Objawem dla użytkownika
-     * jest komunikat od dostawcy, a nie nasza awaria - i tak ma być, bo to jego plik jest
-     * niezgodny z własną nazwą.
+     * Odkąd obsługiwane są dwa formaty spakowane, rozszerzenie jest jedyną rzeczą, która je od
+     * siebie odróżnia, i to jest cała cena decyzji o nieotwieraniu archiwów. Plik nazwany
+     * niezgodnie ze swoją zawartością przejdzie tę kontrolę i zostanie odrzucony dopiero przez
+     * dostawcę, jako błąd trwały - zlecenie kończy się wtedy na pierwszej próbie, bez pełnego
+     * cyklu ponowień, a użytkownik dostaje komunikat dotyczący jego pliku, a nie awarii usługi.
      *
-     * @return typ albo pusty Optional, jeśli zawartość nie pasuje do żadnego obsługiwanego
+     * @return rozpoznany typ albo pusty wynik, jeśli zawartość nie pasuje do żadnego obsługiwanego
      */
     public static Optional<FileType> detect(byte[] content, String filename) {
         if (startsWith(content, PDF_MAGIC)) {
@@ -110,12 +103,13 @@ public enum FileType {
             if (lower.endsWith(DOCX.extension)) {
                 return Optional.of(DOCX);
             }
-            // Każde inne archiwum (.zip, .pptx, .odt) odrzucamy. Lista dozwolonych, a nie
-            // "cokolwiek jest ZIP-em": bez tego dowolne archiwum poszłoby do dostawcy.
+            // Pozostałe archiwa są odrzucane. Lista dozwolonych zamiast reguły "cokolwiek jest
+            // archiwum": bez niej dowolne archiwum trafiłoby do dostawcy.
             return Optional.empty();
         }
-        // Tekst nie ma sygnatury - rozstrzyga go dopiero próba zdekodowania jako UTF-8,
-        // którą robi UploadedFile. Tutaj mówimy tylko, że nie jest to żaden ze znanych binariów.
+        // Tekst nie ma sygnatury - rozstrzyga go dopiero próba zdekodowania jako UTF-8, którą
+        // wykonuje walidacja wgrywanego pliku. Tutaj stwierdzane jest wyłącznie to, że plik nie
+        // jest żadnym ze znanych formatów binarnych.
         return Optional.of(TXT);
     }
 
@@ -131,7 +125,7 @@ public enum FileType {
         return true;
     }
 
-    /** Do komunikatu błędu - użytkownik ma wiedzieć, co wolno wgrać. */
+    /** Lista rozszerzeń do komunikatu błędu - użytkownik ma wiedzieć, co wolno wgrać. */
     public static String allowedExtensions() {
         StringBuilder allowed = new StringBuilder();
         for (FileType type : values()) {

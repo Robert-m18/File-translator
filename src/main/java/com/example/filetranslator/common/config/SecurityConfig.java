@@ -52,6 +52,14 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import java.util.Arrays;
 import java.util.List;
 
+/**
+ * Konfiguracja bezpieczeństwa: bezstanowy łańcuch filtrów, autoryzacja po ścieżkach, CORS,
+ * CSRF oraz opcjonalne logowanie przez Google.
+ *
+ * Tożsamość niesie wyłącznie token JWT w ciasteczku httpOnly - nie ma sesji HTTP ani nagłówka
+ * Authorization. Dzięki temu uwierzytelnienie nie wymaga stanu po stronie serwera i skaluje się
+ * na wiele instancji, a token pozostaje niedostępny dla JavaScriptu.
+ */
 @Slf4j
 @Configuration
 @RequiredArgsConstructor
@@ -61,19 +69,19 @@ public class SecurityConfig {
             "/auth/**",
             /*
              * Logowanie przez Google: /oauth2/authorization/{id} rozpoczyna przepływ,
-             * /login/oauth2/code/{id} jest adresem powrotnym od dostawcy. Obie ścieżki
-             * MUSZĄ być publiczne - to na nich użytkownik dopiero się uwierzytelnia.
-             * Bez tego wpadają na anyRequest().authenticated() i kończą się 401,
-             * czyli logowanie wymagałoby bycia zalogowanym.
+             * /login/oauth2/code/{id} jest adresem powrotnym od dostawcy. Obie ścieżki muszą być
+             * publiczne, ponieważ użytkownik dopiero się na nich uwierzytelnia - objęte regułą
+             * anyRequest().authenticated() kończyłyby się odpowiedzią 401, czyli logowanie
+             * wymagałoby bycia zalogowanym.
              */
             "/oauth2/**",
             "/login/oauth2/**",
             // Dokumentacja API. Na profilu prod springdoc jest wyłączony w application-prod.yml,
-            // więc te ścieżki po prostu nie istnieją.
+            // więc te ścieżki tam nie istnieją.
             "/v3/api-docs/**",
             "/swagger-ui/**",
             "/swagger-ui.html",
-            // Probe'y dla orkiestratora/load balancera - muszą działać bez uwierzytelnienia
+            // Probe'y dla orkiestratora i load balancera - muszą działać bez uwierzytelnienia.
             "/actuator/health",
             "/actuator/health/**",
             "/actuator/info"
@@ -87,8 +95,9 @@ public class SecurityConfig {
     private String frontendOrigins;
 
     /**
-     * JwtFilter tworzony jawnie jako bean (bez @Component), żeby Spring Boot nie
-     * zarejestrował go dodatkowo jako zwykłego filtra serwletowego dla wszystkich żądań.
+     * Tworzy filtr JWT jawnie jako bean, bez adnotacji @Component. Filtr oznaczony @Component
+     * zostałby dodatkowo zarejestrowany jako zwykły filtr serwletowy i działał również poza
+     * łańcuchem Spring Security, także na ścieżkach świadomie z niego wyłączonych.
      */
     @Bean
     public JwtFilter jwtFilter(JwtUtil jwtUtil,
@@ -105,14 +114,13 @@ public class SecurityConfig {
     }
 
     /**
-     * Wyłącza rejestrację filtrów w kontenerze serwletów.
+     * Wyłącza rejestrację filtra limitera w kontenerze serwletów.
      *
-     * Spring Boot rejestruje KAŻDY bean typu Filter jako zwykły filtr serwletowy, niezależnie
-     * od tego, czy powstał przez @Component, czy przez @Bean - i niezależnie od tego, że
-     * dokładamy go jawnie do łańcucha Spring Security. Bez tego oba filtry wykonywałyby się
-     * DWA RAZY na żądanie. Dla limitera to nie jest subtelność: każde żądanie zabierałoby
-     * z kubełka dwa żetony zamiast jednego, więc realny próg byłby połową skonfigurowanego,
-     * a nikt by tego nie zauważył poza użytkownikami odcinanymi w połowie limitu.
+     * Spring Boot rejestruje każdy bean typu Filter jako filtr serwletowy niezależnie od tego,
+     * czy powstał przez @Component, czy przez @Bean, i niezależnie od jawnego dodania go do
+     * łańcucha Spring Security. Bez tej rejestracji filtr wykonywałby się dwa razy na żądanie,
+     * a więc każde żądanie zabierałoby z kubełka dwa żetony zamiast jednego i rzeczywisty próg
+     * limitu byłby połową skonfigurowanego - bez żadnego widocznego objawu.
      */
     @Bean
     public FilterRegistrationBean<RateLimitFilter> rateLimitFilterRegistration(RateLimitFilter filter) {
@@ -121,6 +129,7 @@ public class SecurityConfig {
         return registration;
     }
 
+    /** Ten sam mechanizm co wyżej, dla filtra JWT: bez niego uwierzytelnianie biegłoby dwa razy. */
     @Bean
     public FilterRegistrationBean<JwtFilter> jwtFilterRegistration(JwtFilter filter) {
         FilterRegistrationBean<JwtFilter> registration = new FilterRegistrationBean<>(filter);
@@ -129,29 +138,23 @@ public class SecurityConfig {
     }
 
     /**
-     * Ochrona CSRF wariantem "double submit cookie", dostrojonym pod frontend
-     * na innej domenie niż API.
+     * Buduje repozytorium tokenów CSRF w wariancie "double submit cookie", dostrojonym pod
+     * frontend stojący na innej domenie niż API.
      *
-     * Dlaczego jest włączona: na produkcji ciasteczka lecą z SameSite=None, bo inaczej
-     * przeglądarka w ogóle nie wysłałaby ich do API stojącego pod inną domeną niż SPA.
-     * Ale SameSite był JEDYNĄ ochroną przed CSRF - poluzowanie go do None bez włączenia
-     * tokenu oznaczałoby, że dowolna strona może wykonać żądanie zmieniające stan
-     * na ciasteczkach ofiary. Jedno bez drugiego nie ma sensu.
+     * Ochrona jest włączona, ponieważ na produkcji ciasteczka wymagają SameSite=None - inaczej
+     * przeglądarka nie wysłałaby ich do API pod inną domeną. SameSite był jednak jedyną ochroną
+     * przed CSRF, więc poluzowanie go bez tokenu pozwoliłoby dowolnej stronie wykonywać żądania
+     * zmieniające stan na ciasteczkach ofiary. Te dwie decyzje są nierozłączne.
      *
-     * Ciasteczko XSRF-TOKEN zostaje httpOnly. To nie przeoczenie: skoro frontend jest
-     * na innej domenie, jego JavaScript i tak nie odczytałby ciasteczka API, więc
-     * klasyczny wariant z withHttpOnlyFalse() nic by nie dał. Frontend pobiera wartość
-     * tokenu z GET /auth/csrf, trzyma ją w pamięci i odsyła w nagłówku X-XSRF-TOKEN;
-     * przeglądarka dosyła ciasteczko sama, a serwer porównuje jedno z drugim.
-     *
-     * setCsrfRequestAttributeName(null) wyłącza leniwe ładowanie tokenu i kodowanie XOR,
-     * dzięki czemu wartość w ciasteczku, w ciele GET /auth/csrf i w nagłówku to ten sam
-     * ciąg. Bez tego token z ciała odpowiedzi nie zgadzałby się z zawartością ciasteczka.
+     * Ciasteczko XSRF-TOKEN pozostaje httpOnly: skoro frontend jest na innej domenie, jego
+     * JavaScript i tak nie odczytałby ciasteczka API, więc wariant withHttpOnlyFalse() nie dałby
+     * nic poza osłabieniem ochrony. Frontend pobiera wartość tokenu z GET /auth/csrf, trzyma ją
+     * w pamięci i odsyła w nagłówku, a przeglądarka dosyła ciasteczko sama.
      */
     private CsrfTokenRepository csrfTokenRepository() {
         CookieCsrfTokenRepository repository = new CookieCsrfTokenRepository();
-        // Te same atrybuty co ciasteczka z tokenami - inaczej ciasteczko CSRF nie dotarłoby
-        // tam, gdzie docierają tokeny, i ochrona wywalałaby poprawne żądania.
+        // Te same atrybuty co ciasteczka z tokenami - inaczej ciasteczko CSRF nie dotarłoby tam,
+        // gdzie docierają tokeny, i ochrona odrzucałaby poprawne żądania.
         repository.setCookieCustomizer(cookie -> cookie
                 .secure(cookieProperties.secure())
                 .sameSite(cookieProperties.sameSite())
@@ -160,22 +163,19 @@ public class SecurityConfig {
     }
 
     /**
-     * Wpina logowanie przez Google - ale TYLKO wtedy, gdy klient OAuth2 jest skonfigurowany.
+     * Wpina logowanie przez Google, ale wyłącznie wtedy, gdy klient OAuth2 jest skonfigurowany.
      *
-     * Bez spring.security.oauth2.client.registration.* bean ClientRegistrationRepository
-     * w ogóle nie powstaje, a bezwarunkowe http.oauth2Login() WYWALIŁOBY START APLIKACJI.
-     * Znaczyłoby to, że gołe ./mvnw spring-boot:run przestaje działać każdemu, kto nie ma
-     * konta w Google Cloud - a to ta sama zasada, dla której domyślnym dostawcą tłumaczenia
-     * jest atrapa "echo", a nie DeepL: brak konfiguracji ma dawać działającą aplikację
-     * z mniejszą liczbą funkcji, a nie aplikację martwą.
+     * Bez konfiguracji klienta bean ClientRegistrationRepository nie powstaje, a bezwarunkowe
+     * wywołanie oauth2Login() przerwałoby start aplikacji. Warunek sprawia, że brak konfiguracji
+     * daje aplikację działającą z mniejszą liczbą funkcji zamiast aplikacji martwej - ta sama
+     * zasada, dla której domyślnym dostawcą tłumaczenia jest atrapa.
      *
-     * Przy braku klienta leci WARN, dokładnie jak w EchoTranslationProvider. Cicha nieobecność
-     * funkcji to ten sam tryb awarii, który w tym projekcie kosztował już godzinę przy
-     * TRANSLATION_PROVIDER: aplikacja wstaje, wygląda zdrowo i po prostu nie robi tego,
-     * czego się po niej spodziewano.
+     * Wyłączenie funkcji jest sygnalizowane ostrzeżeniem w logu, ponieważ cicha nieobecność
+     * funkcji jest trudna do zdiagnozowania: aplikacja wstaje, wygląda zdrowo i po prostu nie
+     * robi tego, czego się po niej oczekuje.
      *
-     * CSRF nie wymaga tu żadnego wyjątku: obie ścieżki OAuth2 to GET, a CsrfFilter obejmuje
-     * wyłącznie metody zmieniające stan.
+     * CSRF nie wymaga tu wyjątku - obie ścieżki OAuth2 obsługują metodę GET, a CsrfFilter
+     * obejmuje wyłącznie metody zmieniające stan.
      */
     private void configureGoogleLogin(HttpSecurity http,
                                       ObjectProvider<ClientRegistrationRepository> clientRegistrations,
@@ -192,14 +192,12 @@ public class SecurityConfig {
         }
 
         http.oauth2Login(oauth2 -> oauth2
-                // Żądanie autoryzacyjne w ciasteczku, nie w sesji - łańcuch jest STATELESS,
-                // więc domyślne repozytorium sesyjne nie miałoby gdzie go odłożyć.
-                // Pełne uzasadnienie i pułapka z SameSite: w samej klasie repozytorium.
+                // Żądanie autoryzacyjne trafia do ciasteczka, nie do sesji - łańcuch jest
+                // STATELESS, więc domyślne repozytorium sesyjne nie miałoby gdzie go odłożyć.
                 .authorizationEndpoint(endpoint -> endpoint
                         .authorizationRequestRepository(authorizationRequestRepository))
-                // Kontrole (potwierdzony adres, blokada konta) siedzą w serwisie, a nie
-                // w handlerze sukcesu: tylko stamtąd da się ODMÓWIĆ tak, żeby odmowa
-                // trafiła do handlera porażki.
+                // Kontrole (potwierdzony adres, blokada konta) znajdują się w serwisie, a nie
+                // w handlerze sukcesu: tylko stamtąd odmowa trafia do handlera porażki.
                 .userInfoEndpoint(endpoint -> endpoint.oidcUserService(oidcUserService))
                 .successHandler(successHandler)
                 .failureHandler(failureHandler));
@@ -216,6 +214,9 @@ public class SecurityConfig {
                                            CookieOAuth2AuthorizationRequestRepository authorizationRequestRepository)
             throws Exception {
         CsrfTokenRequestAttributeHandler csrfRequestHandler = new CsrfTokenRequestAttributeHandler();
+        // Wyłącza leniwe ładowanie tokenu i kodowanie XOR, dzięki czemu wartość w ciasteczku,
+        // w ciele GET /auth/csrf i w nagłówku to ten sam ciąg. Bez tego token z ciała odpowiedzi
+        // nie zgadzałby się z zawartością ciasteczka.
         csrfRequestHandler.setCsrfRequestAttributeName(null);
 
         http
@@ -223,90 +224,76 @@ public class SecurityConfig {
                 .csrf(csrf -> csrf
                         .csrfTokenRepository(csrfTokenRepository())
                         .csrfTokenRequestHandler(csrfRequestHandler))
-                // Bez sesji HTTP - tożsamość niesie wyłącznie token w ciasteczku
+                // Bez sesji HTTP - tożsamość niesie wyłącznie token w ciasteczku.
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .exceptionHandling(ex -> ex
-                        // 401 dla niezalogowanych, 403 dla zalogowanych bez uprawnień -
-                        // w obu przypadkach w formacie ProblemDetail, tak jak reszta błędów API
+                        // 401 dla niezalogowanych, 403 dla zalogowanych bez uprawnień - w obu
+                        // przypadkach w formacie ProblemDetail, tak jak reszta błędów API.
                         .authenticationEntryPoint(authenticationEntryPoint)
                         .accessDeniedHandler(accessDeniedHandler)
                 )
                 .authorizeHttpRequests(auth -> auth
                         /*
-                         * MUSI stać przed regułą dla PUBLIC_ENDPOINTS - reguły dopasowywane
-                         * są w kolejności deklaracji i wygrywa pierwsze trafienie, a
-                         * PUBLIC_ENDPOINTS zawiera /auth/**, które objęłoby także tę ścieżkę.
+                         * Reguła musi stać przed PUBLIC_ENDPOINTS: dopasowanie następuje
+                         * w kolejności deklaracji i wygrywa pierwsze trafienie, a PUBLIC_ENDPOINTS
+                         * zawiera /auth/**, które objęłoby także tę ścieżkę.
                          *
-                         * Skutek pominięcia nie byłby tylko taki, że "endpoint jest otwarty".
-                         * JwtFilter działa niezależnie od reguł autoryzacji, więc dla
-                         * zalogowanego wszystko wyglądałoby poprawnie, a anonim dostałby
-                         * @AuthenticationPrincipal == null, czyli NPE i 500 zamiast czystego
-                         * 401 - i to na jedynej ścieżce, o którą frontend pyta przy każdym
-                         * starcie, żeby sprawdzić, czy sesja żyje.
+                         * Konsekwencja odwrotnej kolejności jest gorsza niż samo otwarcie
+                         * endpointu: JwtFilter działa niezależnie od reguł autoryzacji, więc
+                         * zalogowany nie zauważyłby różnicy, a żądanie anonimowe dotarłoby do
+                         * kontrolera z pustym @AuthenticationPrincipal i skończyło się odpowiedzią
+                         * 500 zamiast czystego 401 - na jedynej ścieżce, o którą frontend pyta
+                         * przy każdym starcie, sprawdzając, czy sesja żyje.
                          *
-                         * Zawężone do GET świadomie: /auth/me nie ma wariantu zmieniającego
-                         * stan, więc reguła nie przykryje przypadkiem żadnego przyszłego POST-a.
+                         * Zawężenie do GET jest celowe: /auth/me nie ma wariantu zmieniającego
+                         * stan, więc reguła nie przykryje przypadkiem przyszłej metody POST.
                          */
                         .requestMatchers(HttpMethod.GET, "/auth/me").authenticated()
                         .requestMatchers(PUBLIC_ENDPOINTS).permitAll()
-                        // Pozostałe endpointy Actuatora (metrics, prometheus) wystawiają
-                        // dane operacyjne o systemie - tylko dla administratora.
+                        // Pozostałe endpointy Actuatora (metrics, prometheus) wystawiają dane
+                        // operacyjne o systemie - wyłącznie dla administratora.
                         .requestMatchers("/actuator/**").hasRole("ADMIN")
-                        // Reguła zostaje, mimo że UserController został usunięty (obsługa
-                        // użytkowników idzie na razie przez UserService i repozytorium).
-                        // Domyślne "deny" jest właściwym stanem wyjściowym: gdy kontroler
-                        // wróci, jego endpointy będą chronione od pierwszego commitu,
-                        // a nie dopiero po tym, jak ktoś zauważy, że są otwarte.
+                        // Panel administracyjny. Reguła obowiązuje niezależnie od tego, jakie
+                        // endpointy są pod nią zmapowane, dzięki czemu każdy nowy kontroler w tej
+                        // przestrzeni jest chroniony od pierwszego commitu, a nie dopiero po
+                        // zauważeniu, że jest otwarty.
                         .requestMatchers("/users/**").hasRole("ADMIN")
-                        // Zlecenia tłumaczenia - wyłącznie dla zalogowanych. Reguła jest
-                        // jawna, choć anyRequest() poniżej i tak by ją pokryła: przynależność
-                        // zasobu do konkretnego użytkownika ma być widoczna w konfiguracji
-                        // bezpieczeństwa, a nie wynikać z domyślnego zachowania. Sam dostęp
-                        // do CUDZYCH zleceń odcina warunek na user_id w zapytaniach
-                        // (TranslationJobRepository) - autoryzacja per wiersz nie da się
-                        // wyrazić matcherem po ścieżce.
+                        // Zlecenia tłumaczenia - wyłącznie dla zalogowanych. Reguła jest jawna,
+                        // choć anyRequest() poniżej i tak by ją pokryło: przynależność zasobu do
+                        // użytkownika ma być widoczna w konfiguracji bezpieczeństwa, a nie wynikać
+                        // z domyślnego zachowania. Dostęp do cudzych zleceń odcina warunek na
+                        // user_id w zapytaniach - autoryzacji per wiersz nie da się wyrazić
+                        // matcherem po ścieżce.
                         .requestMatchers("/translations/**").authenticated()
                         .anyRequest().authenticated()
                 )
                 /*
-                 * JwtFilter stoi ZA SessionManagementFilter, a nie przed
-                 * UsernamePasswordAuthenticationFilter - to decyzja o poprawności ochrony
-                 * CSRF, nie kosmetyka kolejności.
+                 * Pozycja filtra JWT za SessionManagementFilter jest warunkiem działania ochrony
+                 * CSRF, a nie kwestią porządku.
                  *
-                 * Włączony CSRF dokłada CsrfAuthenticationStrategy do strategii uwierzytelnienia
-                 * (dokłada, nie zastępuje - podanie własnej strategii przez
-                 * sessionAuthenticationStrategy() jej NIE wyłącza). Strategia ta przy każdym
-                 * nowym uwierzytelnieniu kasuje token CSRF i wystawia nowy. W aplikacji z sesją
-                 * dzieje się to raz, przy logowaniu, i chroni przed utrwaleniem tokenu. Tutaj
-                 * sesji nie ma, więc SessionManagementFilter przy KAŻDYM żądaniu widzi
-                 * uwierzytelnienie, którego "wcześniej nie było" - o ile JwtFilter zdążył je
-                 * ustawić przed nim.
+                 * Włączony CSRF dokłada do strategii uwierzytelnienia CsrfAuthenticationStrategy
+                 * (dokłada, nie zastępuje - podanie własnej strategii jej nie wyłącza), która przy
+                 * każdym nowym uwierzytelnieniu kasuje token CSRF i wystawia nowy. W aplikacji
+                 * z sesją dzieje się to raz, przy logowaniu, i chroni przed utrwaleniem tokenu.
+                 * Tutaj sesji nie ma, więc przy filtrze ustawionym wcześniej SessionManagementFilter
+                 * widziałby nowe uwierzytelnienie przy każdym żądaniu i unieważniał token, również
+                 * przy zwykłym GET. Skutkiem byłoby 403 CSRF_TOKEN_INVALID na każdym żądaniu
+                 * zmieniającym stan poza pierwszym, przy czym ponowne pobranie tokenu nie pomaga,
+                 * bo nowy ginie tak samo.
                  *
-                 * Objaw był taki: frontend pobiera token z GET /auth/csrf, a serwer unieważnia
-                 * mu go przy najbliższym żądaniu zalogowanego użytkownika - również przy zwykłym
-                 * GET-cie. Pierwsze żądanie zmieniające stan jeszcze przechodziło, każde następne
-                 * wracało z 403 CSRF_TOKEN_INVALID, a ponowne pobranie tokenu nie pomagało, bo
-                 * nowy ginął tak samo. Wylogowanie i odświeżenie tokenu były nieosiągalne.
-                 *
-                 * Po przesunięciu SessionManagementFilter widzi jeszcze uwierzytelnienie
-                 * anonimowe (ustawia je AnonymousAuthenticationFilter) i strategii nie odpala.
-                 * JwtFilter podstawia właściwego użytkownika chwilę później, wciąż przed
-                 * AuthorizationFilter, więc autoryzacja ścieżek działa bez zmian.
-                 *
-                 * Uwaga na testy: .with(csrf()) ze spring-security-test podmienia repozytorium
-                 * tokenów i omija całą tę ścieżkę, więc tego błędu nie wykryje. Regresję pilnuje
-                 * CsrfLifecycleTest, który przechodzi prawdziwą wymianę ciasteczko-nagłówek.
+                 * Przy tej pozycji SessionManagementFilter widzi jeszcze uwierzytelnienie anonimowe
+                 * i strategii nie uruchamia, a JwtFilter podstawia właściwego użytkownika chwilę
+                 * później, wciąż przed AuthorizationFilter.
                  */
                 .addFilterBefore(jwtFilter, ExceptionTranslationFilter.class)
                 /*
-                 * Limiter TUŻ ZA CorsFilter. Wcześniej stał przed całym łańcuchem, więc jego
-                 * odpowiedź 429 nie miała nagłówków CORS i przeglądarka ją blokowała -
-                 * frontend na innym origin widział błąd sieci zamiast komunikatu o limicie.
-                 * Uzasadnienie sensu, komunikat i regresja: RateLimitFilter oraz RateLimitTest.
+                 * Limiter tuż za CorsFilter. Umieszczony przed nim odpowiadałby kodem 429 bez
+                 * nagłówków CORS, a taką odpowiedź przeglądarka blokuje - frontend na innym origin
+                 * widziałby błąd sieci zamiast komunikatu o przekroczeniu limitu.
                  *
-                 * Nadal przed CsrfFilter i przed uwierzytelnianiem, więc odrzucone żądanie
-                 * kosztuje tyle co nic. Skutek uboczny do świadomego przyjęcia: żądania odrzucone
-                 * przez CSRF również zużywają żetony z kubełka.
+                 * Pozycja pozostaje przed CsrfFilter i przed uwierzytelnianiem, więc odrzucone
+                 * żądanie nie kosztuje ani zapytania do bazy, ani wyliczenia BCrypt. Świadomie
+                 * przyjęty skutek uboczny: żądania odrzucone przez CSRF również zużywają żetony.
                  */
                 .addFilterAfter(rateLimitFilter, CorsFilter.class);
 
@@ -322,14 +309,13 @@ public class SecurityConfig {
     }
 
     /**
-     * AuthenticationManager budowany jawnie, zamiast pobierany z AuthenticationConfiguration.
+     * Buduje AuthenticationManager jawnie, zamiast pobierać go z AuthenticationConfiguration.
      *
-     * Powód: menedżer składany automatycznie nie miał ustawionego AuthenticationEventPublisher,
-     * więc Spring Security nie publikował zdarzeń o nieudanym logowaniu - a to na nich opiera się
-     * licznik prób i blokada konta (AuthenticationEventListener). Licznik po prostu nie rósł.
-     *
-     * Przy okazji cała konfiguracja uwierzytelniania jest tu widoczna wprost:
-     * skąd brany jest użytkownik, czym weryfikowane jest hasło i co dzieje się ze zdarzeniami.
+     * Menedżer składany automatycznie nie ma ustawionego AuthenticationEventPublisher, więc
+     * Spring Security nie publikuje zdarzeń o nieudanym logowaniu - a to na nich opiera się
+     * licznik prób i blokada konta. Dodatkową korzyścią jest to, że cała konfiguracja
+     * uwierzytelniania jest widoczna w jednym miejscu: skąd pochodzi użytkownik, czym
+     * weryfikowane jest hasło i co dzieje się ze zdarzeniami.
      */
     @Bean
     public AuthenticationManager authenticationManager(UserDetailsService userDetailsService,
@@ -337,13 +323,12 @@ public class SecurityConfig {
                                                        ApplicationEventPublisher applicationEventPublisher) {
         DaoAuthenticationProvider provider = new DaoAuthenticationProvider(userDetailsService);
         provider.setPasswordEncoder(passwordEncoder);
-        // Blokada administracyjna odsiewana PRZED porównaniem hasła, z własnym kodem
-        // ACCOUNT_BLOCKED zamiast ogólnego ACCOUNT_LOCKED. Checker deleguje do domyślnych
-        // sprawdzeń - uzasadnienie i pułapka pominięcia delegata: BlockedAccountChecker.
+        // Blokada administracyjna odsiewana przed porównaniem hasła, z własnym kodem
+        // ACCOUNT_BLOCKED zamiast ogólnego ACCOUNT_LOCKED, który sugerowałby blokadę mijającą
+        // samoczynnie. Checker deleguje do domyślnych sprawdzeń stanu konta.
         provider.setPreAuthenticationChecks(new BlockedAccountChecker());
-        // Domyślnie true: brak użytkownika zgłaszany jest jako BadCredentialsException,
-        // czyli tak samo jak złe hasło. Zostawiamy - inaczej API pozwalałoby sprawdzać,
-        // które adresy email są zarejestrowane.
+        // Brak użytkownika zgłaszany jest jako BadCredentialsException, czyli tak samo jak złe
+        // hasło. Dzięki temu API nie pozwala sprawdzić, które adresy są zarejestrowane.
         provider.setHideUserNotFoundExceptions(true);
 
         ProviderManager manager = new ProviderManager(provider);
@@ -354,34 +339,32 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
-        // Lista dozwolonych origins z konfiguracji (app.frontend.url), rozdzielona przecinkami.
-        // Przy allowCredentials=true nie wolno użyć "*" - przeglądarka odrzuci taką odpowiedź.
+        // Lista dozwolonych origin z konfiguracji (app.frontend.url), rozdzielona przecinkami.
+        // Przy allowCredentials=true gwiazdka jest niedozwolona - przeglądarka odrzuci odpowiedź.
         configuration.setAllowedOrigins(Arrays.stream(frontendOrigins.split(","))
                 .map(String::trim)
                 .toList());
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
         configuration.setAllowedHeaders(List.of("*"));
-        // Wymagane, żeby przeglądarka w ogóle wysyłała i przyjmowała nasze ciasteczka
+        // Wymagane, żeby przeglądarka wysyłała i przyjmowała ciasteczka tej aplikacji.
         configuration.setAllowCredentials(true);
         /*
-         * Przeglądarka udostępnia JavaScriptowi TYLKO nagłówki wymienione tutaj - reszta
-         * jest dla niego niewidoczna, mimo że przyszła w odpowiedzi. Domyślnie widać
-         * garstkę nagłówków prostych, a Content-Disposition do niej NIE należy.
+         * Przeglądarka udostępnia JavaScriptowi tylko nagłówki wymienione tutaj; pozostałe są dla
+         * niego niewidoczne, mimo że dotarły w odpowiedzi. Domyślna lista obejmuje garstkę
+         * nagłówków prostych i nie zawiera Content-Disposition.
          *
-         * Skutek pominięcia jest cichy i mylący, bo żądanie kończy się sukcesem: pobranie
-         * przetłumaczonego pliku działa, tylko frontend nie ma jak odczytać zaproponowanej
-         * nazwy i zapisuje plik pod nazwą awaryjną. Wykryte 2026-08-10 przy przechodzeniu
-         * przepływu w przeglądarce - "lista-FR.txt" zapisało się jako "tlumaczenie.txt".
-         * Testy MockMvc tego nie złapią, bo nie ma tam ani przeglądarki, ani polityki CORS;
-         * regresję pilnuje CorsExposedHeadersTest.
+         * Pominięcie daje objaw cichy i mylący, bo żądanie kończy się powodzeniem: pobranie
+         * przetłumaczonego pliku działa, tylko frontend nie odczyta zaproponowanej nazwy i zapisze
+         * plik pod nazwą awaryjną.
          *
-         * TRACE_ID_HEADER z tego samego powodu: bez niego użytkownik zgłaszający błąd nie
-         * ma czego podać, żeby dało się odnaleźć jego żądanie w logach.
+         * Nagłówek z identyfikatorem żądania jest wystawiony z tego samego powodu: bez niego
+         * użytkownik zgłaszający błąd nie ma czego podać, żeby dało się odnaleźć jego żądanie
+         * w logach.
          */
         configuration.setExposedHeaders(List.of(
                 TraceIdFilter.TRACE_ID_HEADER,
                 HttpHeaders.CONTENT_DISPOSITION));
-        // Cache preflightu - mniej zapytań OPTIONS
+        // Cache preflightu - ogranicza liczbę żądań OPTIONS.
         configuration.setMaxAge(3600L);
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();

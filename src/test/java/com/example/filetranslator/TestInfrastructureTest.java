@@ -73,7 +73,7 @@ class TestInfrastructureTest {
 
     /**
      * Limiter i magazyn plików mają w tym projekcie po dwie implementacje, z których jedna
-     * jest atrapą na potrzeby przebiegu bez infrastruktury. Sprawdzamy TYP BEANA, bo to
+     * jest atrapą na potrzeby przebiegu bez infrastruktury. Sprawdzany jest typ komponentu, bo to
      * jedyne, co odróżnia "wykonaliśmy kod rozmawiający z Redisem i S3" od "wykonaliśmy
      * mapę w pamięci" - żaden test funkcjonalny tego nie widzi, obie implementacje spełniają
      * ten sam kontrakt.

@@ -121,7 +121,7 @@ class CurrentUserTest {
     }
 
     /**
-     * Regresja na kolejność reguł w SecurityConfig. Bez wpisu dla /auth/me PRZED
+     * Test pilnuje kolejności reguł autoryzacji. Bez wpisu dla tej ścieżki umieszczonego przed
      * PUBLIC_ENDPOINTS ścieżka wpada w permitAll dla /auth/**, żądanie dochodzi do
      * kontrolera z pustym principalem i kończy się 500 zamiast 401.
      */
@@ -134,7 +134,7 @@ class CurrentUserTest {
     }
 
     /**
-     * Regresja na kontrolę claimu "type" w JwtFilter. Token odświeżający ma poprawny podpis,
+     * Test pilnuje kontroli typu tokenu. Token odnawiający ma poprawny podpis,
      * więc bez tej kontroli uwierzytelniłby użytkownika - a że filtr nie sprawdza bazy,
      * działałby także po wylogowaniu, przez pełne 7 dni ważności.
      */

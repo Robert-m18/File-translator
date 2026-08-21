@@ -7,29 +7,28 @@ package com.example.filetranslator.translation.storage;
 import java.util.UUID;
 
 /**
- * Budowa kluczy obiektów. JEDYNE miejsce, w którym powstaje klucz.
+ * Buduje klucze obiektów w magazynie - jedyne miejsce, w którym klucz powstaje.
  *
- * UKŁAD: users/{userId}/jobs/{storageId}/source.{ext} oraz .../result.{ext}
+ * Układ klucza obejmuje identyfikator użytkownika, identyfikator zlecenia i nazwę pliku
+ * źródłowego albo wynikowego wraz z rozszerzeniem.
  *
- * KLUCZ PER ZLECENIE, a nie adresowanie treścią (klucz = SHA-256 pliku). Adresowanie treścią
- * byłoby oszczędniejsze - trafienie w deduplikację nie kopiowałoby nic, bo obiekt już leżałby
- * pod właściwym kluczem - ale wtedy dwa zlecenia wskazują JEDEN obiekt i skasowanie jednego
- * musi sprawdzić, czy drugie go jeszcze nie potrzebuje. To jest liczenie referencji, czyli
- * mechanizm, którego jedna pomyłka kasuje komuś plik w użyciu. Tutaj każde zlecenie ma
- * wyłączność na swój prefiks, więc kasowanie jest jednym wywołaniem i nie ma czego policzyć źle.
+ * Klucz jest przypisany do zlecenia, a nie wyprowadzony z treści pliku. Adresowanie treścią
+ * byłoby oszczędniejsze, bo trafienie w deduplikację nie wymagałoby kopiowania, ale wtedy dwa
+ * zlecenia wskazywałyby jeden obiekt i skasowanie jednego musiałoby sprawdzać, czy drugie go
+ * jeszcze nie potrzebuje. Jest to liczenie referencji, czyli mechanizm, którego pojedyncza
+ * pomyłka kasuje plik będący w użyciu. Przy kluczu na zlecenie każde ma wyłączność na swój
+ * prefiks, więc kasowanie jest jednym wywołaniem i nie ma czego policzyć źle.
  *
- * DLACZEGO storageId TO UUID, A NIE job.id: obiekt musi zostać zapisany PRZED wstawieniem
- * wiersza (uzasadnienie kolejności przy TranslationService.submit), a klucz z identyfikatora
- * wiersza wymagałby najpierw wstawienia wiersza - czyli dokładnie odwrotnej kolejności.
- * UUID jest znany przed jednym i drugim.
+ * Identyfikator magazynowy jest losowy, a nie wzięty z identyfikatora wiersza, ponieważ obiekt
+ * zapisywany jest przed wstawieniem wiersza - klucz zbudowany z identyfikatora wiersza wymagałby
+ * odwrotnej kolejności.
  *
- * Prefiks users/{userId}/ nie jest ozdobą: utrzymuje izolację per użytkownik, tę samą,
- * na której stoi zasięg deduplikacji, i pozwala nadać na kubełku politykę per użytkownik,
- * gdyby kiedyś była potrzebna. Nie jest natomiast ŻADNYM zabezpieczeniem - dostępu do cudzego
- * pliku pilnuje warunek na user_id w zapytaniu, a nie kształt klucza.
+ * Prefiks użytkownika utrzymuje izolację, na której opiera się zasięg deduplikacji, i pozwala
+ * skasować wszystkie pliki konta jednym wywołaniem. Nie jest natomiast zabezpieczeniem - dostępu
+ * do cudzego pliku pilnuje warunek na identyfikator właściciela w zapytaniu, a nie kształt klucza.
  *
- * NIC W KLUCZU NIE POCHODZI OD KLIENTA. Nazwa pliku przysłana przez użytkownika jedzie
- * wyłącznie do nagłówka Content-Disposition; tutaj wchodzi identyfikator użytkownika, UUID
+ * Nic w kluczu nie pochodzi od klienta: nazwa pliku przysłana przez użytkownika trafia wyłącznie
+ * do nagłówka pobierania, a tutaj wchodzą identyfikator użytkownika, losowy identyfikator
  * i rozszerzenie z zamkniętego zbioru obsługiwanych typów.
  */
 public final class ObjectKeys {
@@ -45,21 +44,17 @@ public final class ObjectKeys {
         return UUID.randomUUID().toString();
     }
 
-    /** users/{userId}/jobs/{storageId}/ - z ukośnikiem na końcu, bo to prefiks, nie klucz. */
+    /** Prefiks pojedynczego zlecenia, zakończony ukośnikiem, bo jest prefiksem, a nie kluczem. */
     public static String jobPrefix(Long userId, String storageId) {
         return "users/" + userId + "/jobs/" + storageId + "/";
     }
 
     /**
-     * users/{userId}/ - wszystkie pliki jednego użytkownika, do skasowania razem z kontem.
+     * Prefiks obejmujący wszystkie pliki jednego użytkownika - do skasowania razem z kontem.
      *
-     * Działa wyłącznie dlatego, że identyfikator użytkownika stoi w kluczu NAJWYŻEJ, i to
-     * jest właśnie ten "izolacyjny" powód wymieniony w opisie układu wyżej. Gdyby prefiks
-     * zaczynał się od zlecenia, usunięcie konta wymagałoby wypisania wszystkich jego
-     * kluczy z bazy - czyli odczytu, który przy kasowaniu konta i tak zaraz znika.
-     *
-     * Identyfikator jest liczbą z naszej bazy, nie danymi od klienta, więc nie ma tu czego
-     * uciekać ani sprawdzać - w odróżnieniu od nazwy pliku, która do klucza nie trafia nigdy.
+     * Działa dzięki temu, że identyfikator użytkownika stoi w kluczu najwyżej. Gdyby prefiks
+     * zaczynał się od zlecenia, usunięcie konta wymagałoby wypisania wszystkich jego kluczy
+     * z bazy, czyli odczytu z wierszy, które przy kasowaniu konta i tak zaraz znikają.
      */
     public static String userPrefix(Long userId) {
         return "users/" + userId + "/";
@@ -74,17 +69,16 @@ public final class ObjectKeys {
     }
 
     /**
-     * Prefiks zlecenia odczytany z jego klucza - do skasowania wszystkich jego obiektów.
+     * Wyprowadza prefiks zlecenia z jego klucza - do skasowania wszystkich jego obiektów.
      *
-     * Wyprowadzany z klucza zamiast trzymany w osobnej kolumnie, bo to jedna reguła
-     * ("wszystko do ostatniego ukośnika") zamiast trzeciej kolumny, którą trzeba wypełniać
-     * i która może się rozjechać z dwiema pozostałymi.
+     * Wyprowadzanie zamiast przechowywania w osobnej kolumnie oznacza jedną regułę zamiast
+     * trzeciej kolumny, którą trzeba wypełniać i która może rozjechać się z dwiema pozostałymi.
      */
     public static String prefixOf(String key) {
         int lastSlash = key.lastIndexOf('/');
         if (lastSlash < 0) {
-            // Klucz bez ukośnika nie powstał w tej klasie. Kasowanie po takim prefiksie
-            // objęłoby cały kubełek, więc zamiast zgadywać - odmawiamy.
+            // Klucz bez ukośnika nie powstał w tej klasie, a kasowanie po takim prefiksie objęłoby
+            // cały kubełek - dlatego zamiast zgadywać, metoda odmawia.
             throw new IllegalArgumentException("Klucz obiektu nie ma prefiksu zlecenia");
         }
         return key.substring(0, lastSlash + 1);

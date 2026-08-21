@@ -23,23 +23,21 @@ import java.time.Instant;
 import java.util.List;
 
 /**
- * Operacje panelu administracyjnego na kontach użytkowników.
+ * Operacje panelu administracyjnego na kontach: przegląd, blokada, odblokowanie, zdjęcie
+ * blokady logowania, wymuszone wylogowanie i usunięcie konta.
  *
- * DLACZEGO OSOBNY PAKIET admin/, A NIE METODY W user/
+ * Pakiet admin/ jest osobny, ponieważ jego operacje sięgają do dwóch innych obszarów:
+ * blokada i wymuszone wylogowanie wymagają unieważnienia sesji z pakietu auth/, a usunięcie
+ * konta - skasowania plików z pakietu translation/. Umieszczenie tych metod w pakiecie user/
+ * odwróciłoby regułę "auth zależy od user, nigdy odwrotnie" i utworzyło cykl zależności.
+ * Pakiet stojący nad pozostałymi zachowuje strzałki acykliczne.
  *
- * Zablokowanie konta musi zerwać jego sesje, czyli wołać RefreshTokenService z pakietu auth/.
- * Umieszczenie tego w user/ dałoby zależność user -> auth i odwróciło regułę "auth zależy
- * od user, nigdy odwrotnie", zamieniając ją w cykl. Port z jedną implementacją jest
- * wykluczony inną regułą tego projektu (interfejsy tylko tam, gdzie naprawdę są dwie
- * implementacje). Pakiet stojący NAD oboma zostawia strzałki acykliczne:
- * admin -> user, admin -> auth, auth -> user.
+ * Klasa nie sięga do repozytoriów innych pakietów - korzysta wyłącznie z ich serwisów, dzięki
+ * czemu zmiana wewnętrznej budowy tamtych pakietów nie przenosi się tutaj.
  *
- * admin/ NIE DOTYKA UserRepository - wszystkie zapytania o tabelę users idą przez UserService.
- * Sięganie do repozytorium cudzego pakietu jest w tym projekcie odrzucone wprost (patrz
- * uzasadnienie umiejscowienia OutboxCleanupJob).
- *
- * LOGI: id celu i id administratora, nigdy adres email ani powód blokady. Powód jest treścią
- * podaną przez człowieka o innym człowieku - w logu byłby daną osobową bez terminu ważności.
+ * Do logów trafiają identyfikatory konta i administratora, nigdy adres e-mail ani powód
+ * blokady. Powód jest treścią podaną przez człowieka o innym człowieku, więc w logu byłby daną
+ * osobową bez terminu ważności.
  */
 @Slf4j
 @Service
@@ -48,19 +46,14 @@ public class AdminUserService {
     private final UserService userService;
     private final RefreshTokenService refreshTokenService;
 
-    /**
-     * Kasowanie plików usuwanego konta. To JEDYNE miejsce, w którym admin/ sięga do
-     * translation/ - i sięga po port, a nie po repozytorium tamtego pakietu, tak samo jak
-     * po auth/ sięga przez RefreshTokenService. Strzałki zostają acykliczne:
-     * admin -> translation -> user.
-     */
+    /** Kasowanie plików usuwanego konta - jedyne wejście tego pakietu do obszaru tłumaczeń. */
     private final TranslationService translationService;
 
     /**
-     * Transakcja wołana programowo, wyłącznie na potrzeby kasowania konta: kasowanie plików
-     * MUSI zostać poza nią (to wywołanie po sieci), a decyzja o kasowaniu MUSI być w środku,
-     * bo trzyma ją blokada wierszy. @Transactional na metodzie tej klasy nie dałby rady
-     * rozdzielić jednego od drugiego, a wołanie własnej metody i tak omija proxy Springa.
+     * Transakcja wołana programowo, wyłącznie na potrzeby kasowania konta: kasowanie plików musi
+     * pozostać poza transakcją (jest wywołaniem po sieci), a decyzja o dopuszczalności kasowania
+     * musi znaleźć się w środku, bo opiera się na blokadzie wierszy. Adnotacja na metodzie nie
+     * pozwoliłaby rozdzielić jednego od drugiego.
      */
     private final TransactionTemplate transaction;
 
@@ -85,31 +78,30 @@ public class AdminUserService {
     }
 
     /**
-     * Blokuje konto i NATYCHMIAST zrywa jego sesje.
+     * Blokuje konto i natychmiast unieważnia jego sesje.
      *
-     * Samo ustawienie blocked_at nie wystarcza i nie jest to szczegół: token odświeżający
-     * żyje 7 dni, więc bez revokeAllSessions zablokowany odnawiałby sobie dostęp przez
-     * tydzień (kontrolę stanu w AuthService.refreshToken traktujemy jako drugą, niezależną
-     * warstwę - ta tutaj usuwa same tokeny). Regresja: block_shouldRevokeAllRefreshTokens.
+     * Samo ustawienie daty blokady nie wystarcza: token odświeżający żyje siedem dni, więc bez
+     * unieważnienia sesji zablokowany użytkownik odnawiałby sobie dostęp przez tydzień.
+     * Sprawdzenie stanu konta przy odświeżaniu sesji stanowi drugą, niezależną warstwę - ta
+     * operacja usuwa same tokeny.
      *
-     * Żywy token DOSTĘPOWY przestaje działać przy najbliższym żądaniu dzięki sprawdzeniu
-     * w JwtFilter - to jedyne miejsce, w którym 15-minutowe okno tokenu dostępowego zostało
-     * w tym projekcie domknięte, i wolno je było domknąć tylko dlatego, że filtr i tak
-     * czyta wiersz użytkownika przy każdym żądaniu.
+     * Żywy token dostępowy przestaje działać przy najbliższym żądaniu dzięki sprawdzeniu
+     * w filtrze JWT. Jest to jedyne miejsce, w którym piętnastominutowe okno bezstanowego tokenu
+     * zostało domknięte, i było to możliwe tylko dlatego, że filtr i tak czyta wiersz użytkownika
+     * przy każdym żądaniu, więc kontrola nie kosztuje dodatkowego zapytania.
      */
     @Transactional
     public AdminUserView block(Long targetId, Long adminId, String reason) {
         AdminUserView target = get(targetId);
 
         /*
-         * Kontrola "ostatniego administratora" PRZED kontrolą "nie blokuj siebie", choć
-         * praktycznie odpalić może się tylko przy blokowaniu samego siebie: wołający jest
-         * z definicji niezablokowanym administratorem, więc dopóki celem jest ktoś inny,
-         * niezablokowani są co najmniej dwaj. Kolejność decyduje o KOMUNIKACIE i dlatego
-         * nie jest dowolna - "zostałbyś ostatnim administratorem" nazywa prawdziwy problem
-         * (nie ma drogi powrotnej do roli ADMIN, bo AdminBootstrap z założenia nie promuje
-         * istniejącego konta USER), a "nie możesz zablokować siebie" brzmi jak drobna
-         * niewygoda, którą da się obejść z drugiego konta.
+         * Kontrola ostatniego administratora poprzedza kontrolę działania na własnym koncie.
+         * W praktyce może zadziałać tylko przy blokowaniu samego siebie, bo wołający jest
+         * niezablokowanym administratorem, więc przy cudzym celu niezablokowani są co najmniej
+         * dwaj. Kolejność decyduje o komunikacie: informacja o utracie ostatniego administratora
+         * nazywa prawdziwy problem, ponieważ nie ma automatycznej drogi powrotnej do tej roli,
+         * podczas gdy komunikat o blokowaniu samego siebie brzmiałby jak drobna niewygoda możliwa
+         * do obejścia z drugiego konta.
          */
         if (target.role() == Role.ADMIN) {
             List<Long> unblockedAdmins = userService.lockUnblockedAdminIds();
@@ -128,10 +120,10 @@ public class AdminUserService {
         boolean changed = userService.blockAccount(targetId, Instant.now(), reason);
 
         /*
-         * Rewokacja leci TAKŻE przy powtórnym zablokowaniu już zablokowanego konta.
-         * Wygląda na zbędną pracę, a jest odpowiedzią na wyścig: sesja mogła powstać
-         * między pierwszą blokadą a tym wywołaniem, gdyby pierwsze zawiodło w połowie.
-         * Kosztuje jeden UPDATE po indeksie, a alternatywą jest blokada bez skutku.
+         * Unieważnienie sesji wykonuje się także przy powtórnym zablokowaniu konta już
+         * zablokowanego. Wygląda to na zbędną pracę, a jest odpowiedzią na wyścig: sesja mogła
+         * powstać między pierwszą blokadą a tym wywołaniem, gdyby pierwsze przerwało się w połowie.
+         * Kosztuje jedno zapytanie po indeksie, a alternatywą jest blokada bez skutku.
          */
         int revoked = refreshTokenService.revokeAllSessions(targetId);
 
@@ -142,23 +134,23 @@ public class AdminUserService {
         return get(targetId);
     }
 
+    /** Zdejmuje blokadę administracyjną. Nowe tokeny nie są wystawiane - użytkownik loguje się sam. */
     @Transactional
     public AdminUserView unblock(Long targetId, Long adminId) {
         AdminUserView target = get(targetId);
         userService.unblockAccount(target.id());
 
-        // Bez wystawiania nowych tokenów - odblokowany po prostu loguje się na nowo.
         log.info("Odblokowano konto (id={}, przez id={})", targetId, adminId);
         return get(targetId);
     }
 
     /**
-     * Zdejmuje automatyczną blokadę po nieudanych logowaniach.
+     * Zdejmuje automatyczną blokadę nałożoną po serii nieudanych logowań.
      *
-     * NIE rusza blokady administracyjnej i to jest cały sens rozdzielenia tych dwóch stanów
-     * na osobne kolumny: gdyby kara siedziała w locked_until, ta akcja - i każdy udany login,
-     * i każdy reset hasła - zdejmowałaby ją mimochodem. Regresja:
-     * clearingLoginFailures_shouldNotLiftAdminBlock.
+     * Operacja nie rusza blokady administracyjnej i na tym polega sens trzymania obu stanów
+     * w osobnych kolumnach: gdyby kara administracyjna była zapisana w terminie blokady
+     * logowania, zdejmowałaby ją mimochodem ta akcja, a także każde udane logowanie i każdy
+     * reset hasła.
      */
     @Transactional
     public AdminUserView clearLoginLock(Long targetId, Long adminId) {
@@ -170,16 +162,16 @@ public class AdminUserService {
     }
 
     /**
-     * Zrywa wszystkie sesje konta, NIE blokując go.
+     * Unieważnia wszystkie sesje konta, nie blokując go.
      *
-     * Osobna akcja od blokady, bo odpowiada na inną sytuację: użytkownik zgłasza, że
-     * zostawił się zalogowanym na cudzym komputerze. Gdyby robiła przy okazji blokadę,
-     * pomoc kończyłaby się karą. Regresja: forceLogout_shouldKillSessionsWithoutBlocking.
+     * Akcja jest osobna od blokady, bo odpowiada na inną sytuację - użytkownik zgłasza, że
+     * pozostawił się zalogowanym na cudzym urządzeniu. Gdyby przy okazji blokowała konto, pomoc
+     * kończyłaby się karą.
      *
-     * Uwaga do komunikatu we froncie: token DOSTĘPOWY tego użytkownika działa jeszcze
-     * do 15 minut, bo JwtFilter sprawdza blokadę, a nie zerwane sesje - wiersz użytkownika
-     * nic o nich nie mówi. Nie da się tego zmienić bez odpytywania bazy o sesje przy każdym
-     * żądaniu, czyli bez rezygnacji z bezstanowego tokenu dostępowego.
+     * Token dostępowy tego użytkownika pozostaje ważny do piętnastu minut, ponieważ filtr JWT
+     * sprawdza blokadę konta, a nie stan sesji - wiersz użytkownika nic o sesjach nie mówi.
+     * Zmiana wymagałaby odpytywania bazy o sesje przy każdym żądaniu, czyli rezygnacji
+     * z bezstanowego tokenu dostępowego. Komunikat we froncie mówi o tym wprost.
      */
     @Transactional
     public AdminUserView forceLogout(Long targetId, Long adminId) {
@@ -193,33 +185,28 @@ public class AdminUserService {
 
     /**
      * Kasuje konto razem z sesjami, tokenami resetu, zleceniami tłumaczenia i plikami.
-     * NIEODWRACALNIE - nie ma tu kosza ani kolumny "usunięte".
+     * Operacja jest nieodwracalna - nie ma kosza ani kolumny oznaczającej konto jako usunięte.
      *
-     * DLACZEGO KASOWANIE, SKORO JEST BLOKADA: blokada odcina dostęp, ale zostawia wszystko
-     * na miejscu - adres, imię, hash hasła i pliki. Prawo do usunięcia danych trzeba było
-     * dotąd realizować ręcznym UPDATE'em w bazie, czyli operacją bez śladu i bez kontroli,
-     * kto ją wykonał. Blokada zostaje osobną akcją, bo odpowiada na inne pytanie
-     * ("odciąć dostęp") niż kasowanie ("usunąć dane").
+     * Kasowanie jest osobną akcją od blokady, bo odpowiada na inne pytanie: blokada odcina
+     * dostęp, ale zostawia na miejscu adres, imię, hash hasła i pliki. Bez tej operacji żądanie
+     * usunięcia danych trzeba by realizować ręczną zmianą w bazie, czyli bez śladu i bez kontroli,
+     * kto ją wykonał.
      *
-     * KOLEJNOŚĆ KONTROLI JEST ODWROTNA NIŻ PRZY BLOKADZIE i to nie jest niekonsekwencja.
-     * Tam "ostatni administrator" idzie pierwszy, bo blokada SIEBIE bywa dopuszczalna
-     * (gdy administratorów jest dwóch) i chodziło o trafniejszy komunikat. Tutaj skasowanie
-     * siebie jest odrzucane ZAWSZE, więc komunikat o ostatnim administratorze byłby
-     * nieprawdą sugerującą, że przy drugim administratorze operacja by przeszła.
+     * Kolejność kontroli jest odwrotna niż przy blokadzie: tam pierwsza jest kontrola ostatniego
+     * administratora, bo blokada własnego konta bywa dopuszczalna. Tutaj skasowanie własnego konta
+     * jest odrzucane zawsze, więc komunikat o ostatnim administratorze byłby nieprawdą sugerującą,
+     * że przy drugim administratorze operacja by przeszła.
      *
-     * KONTROLA OSTATNIEGO ADMINISTRATORA WYGLĄDA NA MARTWĄ I NIĄ NIE JEST. Sekwencyjnie
-     * faktycznie nie ma jak jej odpalić: wołający jest niezablokowanym administratorem,
-     * więc gdy celem jest ktoś inny, niezablokowani są co najmniej dwaj. Odpala się dopiero
-     * WSPÓŁBIEŻNIE - dwóch administratorów kasujących się nawzajem w tej samej chwili
-     * przeszłoby obie kontrole "nie kasuję siebie" i zostałoby zero administratorów, czyli
-     * stan, z którego aplikacja sama nie wstanie (AdminBootstrap z założenia nie promuje
-     * istniejącego konta USER). Blokada wierszy w lockUnblockedAdminIds ustawia takich
-     * dwóch w kolejkę: drugi widzi wynik pierwszego i dostaje odmowę.
+     * Kontrola ostatniego administratora wygląda na nieosiągalną, ale nią nie jest. Sekwencyjnie
+     * faktycznie nie ma jak jej uruchomić, bo wołający jest niezablokowanym administratorem.
+     * Zadziała współbieżnie: dwóch administratorów kasujących się nawzajem w tej samej chwili
+     * przeszłoby obie kontrole działania na własnym koncie i nie zostałby żaden administrator,
+     * czyli powstałby stan, z którego aplikacja sama się nie podniesie. Blokada wierszy ustawia
+     * takie wywołania w kolejkę, więc drugie widzi wynik pierwszego i dostaje odmowę.
      *
-     * Sesji nie unieważniamy osobno - wiersze refresh_tokens znikają z kaskadą klucza
-     * obcego. Żywy token DOSTĘPOWY przestaje działać przy najbliższym żądaniu, bo
-     * UserDetailsServiceImpl nie odnajdzie już konta; to jedyne miejsce obok blokady,
-     * w którym 15-minutowe okno tokenu bezstanowego jest domknięte.
+     * Sesje nie są unieważniane osobno - wiersze tokenów znikają razem z kontem dzięki kaskadzie
+     * klucza obcego. Żywy token dostępowy przestaje działać przy najbliższym żądaniu, ponieważ
+     * warstwa uwierzytelniania nie odnajduje już konta.
      */
     public void delete(Long targetId, Long adminId) {
         transaction.executeWithoutResult(status -> {
@@ -240,23 +227,22 @@ public class AdminUserService {
             }
 
             if (!userService.deleteAccount(targetId)) {
-                // Zniknęło między odczytem a kasowaniem - dla wołającego to ten sam
-                // przypadek co "nie ma takiego konta".
+                // Konto zniknęło między odczytem a kasowaniem - dla wołającego jest to ten sam
+                // przypadek co brak konta.
                 throw new AdminUserNotFoundException();
             }
         });
 
         /*
-         * Po zatwierdzeniu, nie w transakcji. Dwa powody, oba już w tym projekcie zapadły:
-         * wywołanie po sieci nie ma prawa trzymać połączenia z pulą, a gdyby transakcja
-         * wycofała się po skasowaniu plików, zostałoby konto ze zleceniami bez treści.
+         * Kasowanie plików następuje po zatwierdzeniu transakcji z dwóch powodów: wywołanie po
+         * sieci nie może trzymać połączenia z puli, a wycofanie transakcji po usunięciu plików
+         * zostawiłoby konto ze zleceniami bez treści.
          *
-         * AWARIA MAGAZYNU NIE PRZEWRACA CAŁEJ OPERACJI. Konto jest już skasowane i cofnąć
-         * się nie da, więc wyjątek puszczony dalej dałby administratorowi 500 po UDANYM
-         * usunięciu - a ponowienie odpowiedziałoby wtedy 404. Zamiast tego zostaje WARN
-         * z identyfikatorem: pliki są już nieosiągalne (nie ma wiersza, który by je
-         * wskazywał) i wygaszą się przez regułę na kubełku, tak samo jak osierocone przez
-         * retencję. To ta sama decyzja co w TranslationCleanupJob.
+         * Awaria magazynu nie przewraca całej operacji. Konto jest już skasowane i cofnąć się nie
+         * da, więc wyjątek puszczony dalej dałby administratorowi błąd 500 po udanym usunięciu,
+         * a ponowienie odpowiedziałoby wtedy "nie ma takiego konta". Zamiast tego powstaje wpis
+         * ostrzegawczy: pliki są już nieosiągalne, bo nie wskazuje ich żaden wiersz, i wygasną
+         * przez regułę na kubełku, tak samo jak pliki osierocone przez retencję.
          */
         try {
             translationService.deleteAllFilesOf(targetId);

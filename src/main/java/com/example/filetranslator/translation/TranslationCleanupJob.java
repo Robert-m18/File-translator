@@ -18,33 +18,29 @@ import java.time.Instant;
 import java.util.List;
 
 /**
- * Nocne usuwanie starych zleceń tłumaczenia.
+ * Nocne usuwanie starych zleceń tłumaczenia razem z ich plikami.
  *
- * DLACZEGO TO ISTNIEJE - nie chodzi o rozmiar tabeli, tylko o to, CO w niej leży.
- * source_content i result_content trzymają PLIKI UŻYTKOWNIKÓW: umowy, listy, notatki.
- * Bez retencji wyciek bazy oddaje wszystko, co ktokolwiek kiedykolwiek przetłumaczył,
- * od pierwszego dnia działania usługi. To ta sama zasada, dla której OutboxCleanupJob
- * kasuje wysłane maile - z tą różnicą, że tam chodziło o tokeny, a tu o treść.
+ * Powodem nie jest rozmiar tabeli, tylko to, co zlecenia wskazują: pliki użytkowników, czyli
+ * umowy, listy i notatki. Bez retencji wyciek danych obejmowałby wszystko, co ktokolwiek
+ * kiedykolwiek przetłumaczył, od pierwszego dnia działania usługi. Użytkownik może skasować
+ * zlecenie sam, a to zadanie jest tym, co dzieje się, gdy tego nie zrobi.
  *
- * Użytkownik może skasować swoje zlecenie sam (DELETE /translations/{id}); retencja jest
- * tym, co dzieje się, gdy tego nie zrobi.
+ * Kasowane są zlecenia o każdym statusie, w odróżnieniu od skrzynki nadawczej, gdzie wiadomości
+ * nieudane muszą przetrwać jako sygnał diagnostyczny. Tutaj taki powód nie zachodzi: nieudane
+ * zlecenie sprzed miesiąca nie odpowiada na żadne pytanie, którego nie da się zadać metrykom,
+ * a wskazuje dokładnie tę samą treść pliku co udane.
  *
- * KASUJEMY WSZYSTKIE STATUSY, w odróżnieniu od skrzynki nadawczej, gdzie FAILED musi
- * przetrwać, bo countFailed() jest jedynym sygnałem "czy maile w ogóle wychodzą". Tutaj taki
- * powód nie zachodzi: nieudane zlecenie sprzed 30 dni nie odpowiada na żadne pytanie, którego
- * nie da się zadać metrykom, a niesie dokładnie tę samą treść pliku co udane.
+ * Wiek liczony jest od utworzenia, a nie od zakończenia: zlecenie, które nigdy się nie zakończyło,
+ * ma pustą datę zakończenia i nigdy nie zostałoby usunięte - czyli akurat najbardziej zapomniane
+ * wiersze zostawałyby na zawsze.
  *
- * ODLICZAMY OD created_at, a nie od completed_at: zlecenie, które nigdy się nie zakończyło
- * (bo utknęło albo dostawca był niedostępny przez dobę), ma completed_at puste i nigdy nie
- * zostałoby usunięte - czyli akurat najbardziej zapomniane wiersze zostawałyby na zawsze.
+ * Zadanie należy do pakietu tłumaczeń, a nie do wspólnego zadania sprzątającego w pakiecie auth:
+ * sięganie z tamtego pakietu do repozytorium innej funkcji sklejałoby je przez wnętrze. Każda
+ * funkcja odpowiada za retencję własnych danych.
  *
- * Osobna klasa, a nie krok w ExpiredTokenCleanupJob: tamten job należy do pakietu auth,
- * a sięganie z niego do repozytorium innej funkcji sklejałoby pakiety przez ich wnętrze.
- * Każda funkcja odpowiada za retencję własnych danych.
- *
- * UWAGA przy wdrożeniu wieloinstancyjnym: @Scheduled odpala się w każdej instancji osobno,
- * więc przy dwóch podach kasowanie wykona się dwa razy. Tu nieszkodliwie (usuwanie jest
- * idempotentne), ale przy zadaniach ze skutkami ubocznymi trzeba dołożyć ShedLock.
+ * Przy wdrożeniu wieloinstancyjnym harmonogram uruchamia się w każdej instancji osobno, więc
+ * kasowanie wykona się tyle razy, ile jest instancji. Tutaj jest to nieszkodliwe, bo usuwanie
+ * jest idempotentne, ale zadania ze skutkami ubocznymi wymagałyby blokady rozproszonej.
  */
 @Slf4j
 @Component
@@ -55,9 +51,9 @@ public class TranslationCleanupJob {
     private final ObjectStore objectStore;
 
     /**
-     * Transakcja wołana programowo: kasowanie plików MUSI zostać poza nią (patrz kolejność
-     * przy removeOlderThanRetention), a @Transactional na metodzie prywatnej tej samej klasy
-     * nie zadziałałoby wcale - wywołanie własnej metody omija proxy Springa.
+     * Transakcja wołana programowo: kasowanie plików musi pozostać poza nią, a adnotacja na
+     * metodzie prywatnej tej samej klasy nie zadziałałaby wcale, bo wywołanie własnej metody
+     * omija proxy Springa.
      */
     private final TransactionTemplate transaction;
 
@@ -72,8 +68,8 @@ public class TranslationCleanupJob {
     }
 
     /**
-     * 3:20 - po sprzątaniu tokenów (3:00) i po sprzątaniu skrzynki nadawczej (3:10).
-     * Rozsunięte w czasie, żeby trzy kasowania nie biły w bazę jednocześnie.
+     * Uruchamiane w nocy, po sprzątaniu tokenów i skrzynki nadawczej. Godziny są rozsunięte, żeby
+     * trzy kasowania nie obciążały bazy jednocześnie.
      */
     @Scheduled(cron = "0 20 3 * * *")
     public void cleanupOldJobs() {
@@ -82,22 +78,24 @@ public class TranslationCleanupJob {
     }
 
     /**
-     * Wydzielone z metody harmonogramu, żeby test mógł wywołać samo kasowanie, bez czekania
-     * na cron i bez zależności od tego, czy harmonogram jest w danym profilu włączony.
+     * Usuwa zlecenia starsze niż skonfigurowana retencja razem z ich plikami.
      *
-     * KOLEJNOŚĆ: klucze, wiersze, dopiero potem pliki. Ten sam niezmiennik co przy kasowaniu
-     * pojedynczego zlecenia - stanem pośrednim, który może zostać po awarii, jest zawsze
-     * PLIK BEZ WIERSZA, nigdy wiersz bez pliku. Klucze trzeba odczytać przed skasowaniem
-     * wierszy, bo potem nie ma już skąd wziąć prefiksów.
+     * Metoda jest wydzielona z zadania harmonogramu, dzięki czemu test wywołuje samo kasowanie,
+     * bez czekania na wyzwalacz czasowy i niezależnie od tego, czy harmonogram jest w danym
+     * profilu włączony.
      *
-     * Reguła wygasania na kubełku robi to samo niezależnie od tego zadania i jest tu siatką
-     * bezpieczeństwa (łapie też pliki osierocone przy przyjmowaniu zleceń). NIE zastępuje
-     * jednak tego kroku: jej TTL to druga wartość w drugim miejscu, a jedyne, co wiąże ją
-     * z app.translation.retention, to uważność. Kasowanie po stronie aplikacji sprawia,
-     * że przy skróceniu retencji pliki znikają razem z wierszami, a nie dopiero wtedy,
-     * gdy ktoś poprawi też regułę na kubełku.
+     * Kolejność kroków to klucze, wiersze, dopiero potem pliki. Obowiązuje ten sam niezmiennik co
+     * przy kasowaniu pojedynczego zlecenia: stanem pośrednim po awarii jest zawsze plik bez
+     * wiersza, nigdy wiersz bez pliku. Klucze trzeba odczytać przed skasowaniem wierszy, bo potem
+     * nie ma już skąd wziąć prefiksów.
      *
-     * @return ile zleceń usunięto
+     * Reguła wygasania na kubełku robi to samo niezależnie od tego zadania i stanowi siatkę
+     * bezpieczeństwa, wyłapując również pliki osierocone przy przyjmowaniu zleceń. Nie zastępuje
+     * jednak tego kroku: jej termin to druga wartość ustawiona w innym miejscu, a wiąże je
+     * wyłącznie uważność. Kasowanie po stronie aplikacji sprawia, że po skróceniu retencji pliki
+     * znikają razem z wierszami, a nie dopiero po poprawieniu reguły na kubełku.
+     *
+     * @return liczba usuniętych zleceń
      */
     public int removeOlderThanRetention() {
         Instant cutoff = DbClock.now().minus(properties.retention());
@@ -109,9 +107,9 @@ public class TranslationCleanupJob {
             try {
                 objectStore.deletePrefix(ObjectKeys.prefixOf(key));
             } catch (RuntimeException e) {
-                // Jedno niedokasowane zlecenie nie może zatrzymać sprzątania pozostałych.
-                // Plik zostaje osierocony i wygaśnie przez regułę na kubełku - dlatego
-                // ta reguła jest tu potrzebna nawet przy działającym kasowaniu.
+                // Jedno nieudane kasowanie nie może zatrzymać sprzątania pozostałych zleceń.
+                // Plik zostaje osierocony i wygaśnie przez regułę na kubełku - dlatego ta reguła
+                // jest potrzebna nawet przy działającym kasowaniu.
                 log.warn("Nie udało się usunąć plików zlecenia z magazynu: {}", e.toString());
             }
         }

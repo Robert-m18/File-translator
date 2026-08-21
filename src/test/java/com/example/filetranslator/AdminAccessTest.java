@@ -124,7 +124,7 @@ class AdminAccessTest {
     }
 
     /**
-     * Regresja na dwie reguły naraz, i obie trzeba sprawdzać razem.
+     * Test pilnuje dwóch reguł naraz i obie trzeba sprawdzać razem.
      *
      * Gdyby bootstrap podnosił rolę istniejącego konta, literówka w app.admin.email oddawałaby
      * konto prawdziwego użytkownika razem z dostępem do /actuator/**. Gdyby nadpisywał hasło,

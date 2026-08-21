@@ -10,29 +10,25 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 /**
- * Jedyne miejsce, przez które fakt "zlecenie skończone" wychodzi poza ten pakiet.
+ * Jedyne wyjście faktu "zlecenie zostało wykonane" poza ten pakiet.
  *
- * WAŻNE dla wołających: metody tej klasy trzeba wywołać WEWNĄTRZ transakcji zapisującej
- * wynik. Zamówienie maila commituje się wtedy razem z nim albo wcale - wycofany zapis nie
- * zostawia użytkownikowi wiadomości "tłumaczenie gotowe" prowadzącej do zlecenia, które
- * dalej czeka w kolejce.
+ * Metody tej klasy trzeba wywoływać wewnątrz transakcji zapisującej wynik. Zamówienie maila
+ * commituje się wtedy razem z nim albo wcale, dzięki czemu wycofany zapis nie zostawia
+ * użytkownikowi wiadomości o gotowym tłumaczeniu prowadzącej do zlecenia, które nadal czeka.
  *
- * DLACZEGO ISTNIEJE JAKO OSOBNA KLASA, skoro dziś robi jedną rzecz: to jest szew pod
- * publikację zdarzeń na zewnątrz (Kafka, analityka). Gdy się pojawi, dochodzi tu druga
- * linia, a worker i serwis zostają nietknięte. Szew jest tani, bo nie jest pusty - ma
- * dzisiejsze, realne użycie.
+ * Klasa jest osobna, mimo że dziś robi jedną rzecz, ponieważ stanowi szew pod publikację zdarzeń
+ * na zewnątrz - na przykład do brokera albo do analityki. Wtedy dochodzi tutaj druga linia, a
+ * wykonawca i serwis pozostają nietknięte. Szew nie jest pusty: ma dzisiejsze, realne użycie.
  *
- * DLACZEGO NIE ApplicationEventPublisher: ten projekt miał już zdarzenia Springa jako drogę
- * do maili (@TransactionalEventListener + @Async) i ŚWIADOMIE je usunął - zamiar wysyłki żył
- * wyłącznie w pamięci procesu, więc awaria SMTP albo restart między commitem a wysyłką
- * kasowały go bez śladu. Uzasadnienie jest w MailOutbox. Dokładanie tamtego mechanizmu
- * z powrotem tylko po to, żeby "było gdzie podpiąć Kafkę", dałoby hook bez konsumenta.
+ * Zdarzenia Springa nie są tu użyte świadomie. Ta aplikacja miała już taki mechanizm jako drogę
+ * do wysyłki maili i został usunięty, ponieważ zamiar wysyłki żył wyłącznie w pamięci procesu, więc
+ * awaria serwera pocztowego albo restart między commitem a wysyłką kasowały go bez śladu.
+ * Skrzynka nadawcza rozwiązuje dokładnie ten problem.
  *
- * DLACZEGO NIE MA POWIADOMIENIA O PORAŻCE: porażki są skorelowane. Awaria dostawcy wywraca
- * wszystkie zlecenia naraz, więc mail o niepowodzeniu zamieniłby jedną awarię w lawinę
- * wiadomości do wszystkich użytkowników - w najgorszym możliwym momencie, bo dokładnie wtedy,
- * gdy poczta i tak jest potrzebna do rejestracji i resetów haseł. Status FAILED widać
- * na liście zleceń i przez GET /translations/{id}.
+ * Nie ma powiadomienia o niepowodzeniu, ponieważ porażki są skorelowane: awaria dostawcy wywraca
+ * wszystkie zlecenia naraz, więc mail o niepowodzeniu zamieniłby jedną awarię w lawinę wiadomości
+ * do wszystkich użytkowników, i to w momencie, w którym poczta jest potrzebna do rejestracji
+ * i resetów haseł. Status nieudanego zlecenia widać na liście i w odpowiedzi API.
  */
 @Slf4j
 @Component
@@ -47,9 +43,9 @@ public class TranslationEvents {
                 event.recipientName(),
                 event.originalFilename());
 
-        // Bez adresu i bez nazwy pliku - dane użytkownika. id zlecenia jest tu tym samym
-        // uchwytem co id wiersza skrzynki nadawczej: worker pracuje na wątku bez MDC,
-        // więc traceId nie istnieje i bez id łańcuch diagnostyczny się urywa.
+        // Bez adresu i bez nazwy pliku - to dane użytkownika. Identyfikator zlecenia jest tu
+        // jedynym uchwytem diagnostycznym, bo wykonawca pracuje na wątku bez kontekstu żądania,
+        // więc identyfikator żądania nie istnieje.
         log.debug("Zamówiono powiadomienie o gotowym tłumaczeniu (id={})", event.jobId());
     }
 }

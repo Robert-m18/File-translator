@@ -7,9 +7,9 @@
 # więc dwiema rzeczami naraz: konfiguracją wspólną dla obu wariantów (wszystko poza tymi
 # trzema) oraz konfiguracją wariantu H2, który włącza się profilem `./mvnw test -Ph2`.
 #
-# Świadomie NIE używamy tu ddl-auto: create-drop. Schemat budują te same migracje
-# Liquibase co na produkcji, a Hibernate je potem weryfikuje (ddl-auto: validate).
-# Dzięki temu zwykłe `mvn test` wykrywa rozjazd encji z migracjami oraz błędy
+# Schemat budują świadomie te same migracje co na produkcji, a nie automatyczne tworzenie
+# tabel z encji; warstwa dostępu do danych jedynie weryfikuje zgodność.
+# Dzięki temu zwykły przebieg testów wykrywa rozjazd encji z migracjami oraz błędy
 # w samych changelogach - zamiast maskować je autogeneracją schematu.
 
 spring:
@@ -71,15 +71,15 @@ spring:
     # @MockitoBean - więc przy max_connections = 100 (domyślne w postgres:17-alpine, czyli
     # i w kontenerze podnoszonym przez TestInfrastructure) budżet kończy się przy
     # jedenastym kontekście. Po scaleniu jobów CI dotyczy to KAŻDEGO przebiegu poza -Ph2,
-    # a nie tylko jednego joba - czyli objaw jest teraz widoczny od razu, lokalnie.
+    # a nie tylko jednego zadania CI, więc objaw jest widoczny od razu, także lokalnie.
     #
-    # Objaw jest mylący i dlatego ten komentarz jest tak długi: pada "Failed to load
-    # ApplicationContext" w KLASIE, która akurat wstawała jako pierwsza po wyczerpaniu
-    # budżetu, więc log wskazuje przypadkowy test. Trafione 2026-08-13 - na CI padł
-    # CsrfLifecycleTest, przy odtworzeniu lokalnie TranslationQuotaTest i
-    # TranslationWorkerTest, przy identycznym kodzie. NAZWA TESTU WSKAZUJE MOMENT, NIE
-    # PRZYCZYNĘ. Prawdziwy komunikat siedzi dopiero w ostatnim "Caused by":
-    # org.postgresql.util.PSQLException: FATAL: sorry, too many clients already.
+    # Objaw jest mylący: błąd ładowania kontekstu zgłasza klasa, która akurat wstawała jako
+    # pierwsza po wyczerpaniu budżetu połączeń, więc log wskazuje przypadkowy test. Nazwa
+    # testu wskazuje moment, a nie przyczynę - prawdziwy komunikat znajduje się dopiero
+    # w ostatniej przyczynie łańcucha wyjątków i mówi o wyczerpaniu limitu połączeń bazy.
+
+
+
     #
     # minimum-idle: 0 jest tu ważniejsze niż sam rozmiar puli - bez tego każdy kontekst
     # zajmuje komplet połączeń, nawet jeśli jego testy dawno się skończyły. idle-timeout

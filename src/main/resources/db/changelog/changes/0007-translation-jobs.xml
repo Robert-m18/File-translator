@@ -67,7 +67,7 @@
             </column>
 
             <!--
-                Treść plików trzymamy w bazie, nie na dysku ani w magazynie obiektowym.
+                Na tym etapie treść plików przechowywana jest w bazie, a nie w magazynie obiektowym.
                 Zapis jest wtedy transakcyjny razem z wierszem zlecenia, więc wycofana
                 transakcja nie zostawia osieroconego pliku, kopia zapasowa obejmuje jedno
                 i drugie, a testy na H2 nie potrzebują żadnego wolumenu.

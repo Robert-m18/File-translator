@@ -10,21 +10,21 @@ import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 
 /**
- * Liczy SHA-256 tokenu zapisywany w bazie.
+ * Liczy skrót SHA-256 zapisywany w bazie zamiast wartości oryginalnej.
  *
- * MIMO NAZWY służy też do czegoś drugiego: UploadedFile liczy nią odcisk treści wgranego
- * pliku pod deduplikację tłumaczeń. Nazwa została, bo tokeny są tu głównym zastosowaniem,
- * a przemianowanie ruszyłoby cały moduł auth przy okazji niezwiązanej zmiany. Istotne jest to,
- * że algorytm ma w projekcie DOKŁADNIE jedno miejsce - druga kopia rozjechałaby się po cichu.
+ * Mimo nazwy służy do dwóch rzeczy: skrótów tokenów oraz odcisku treści wgranego pliku, po którym
+ * rozpoznawane są powtórzone tłumaczenia. Istotne jest to, że algorytm ma w całej aplikacji
+ * dokładnie jedno miejsce - druga kopia rozjechałaby się po cichu przy pierwszej zmianie jednej
+ * z nich.
  *
- * Zasada: w bazie nigdy nie leży token, którym da się posłużyć. Trzymamy jego skrót,
- * a przy weryfikacji hashujemy to, co przyszło od klienta, i porównujemy hashe.
- * Wyciek dumpu bazy nie daje wtedy działających tokenów.
+ * Obowiązująca zasada: w bazie nigdy nie leży token, którym da się posłużyć. Przechowywany jest
+ * jego skrót, a przy weryfikacji skrót liczony jest z wartości przysłanej przez klienta
+ * i porównywany. Dzięki temu wyciek zawartości bazy nie daje działających tokenów.
  *
- * Dlaczego zwykłe SHA-256, a nie BCrypt jak przy hasłach: token to losowe 128+ bitów,
- * więc nie da się go zgadnąć atakiem słownikowym - spowalnianie funkcji skrótu nic tu
- * nie wnosi, a kosztowałoby przy każdym odświeżeniu tokenu. Przy hasłach, które ludzie
- * wymyślają sami, jest dokładnie odwrotnie i tam BCrypt zostaje.
+ * Użyty jest zwykły SHA-256, a nie funkcja spowalniająca stosowana przy hasłach, ponieważ token
+ * jest ciągiem losowym o dużej entropii, więc atak słownikowy na niego nie działa. Spowalnianie
+ * nic by tu nie wniosło, a kosztowałoby przy każdym odświeżeniu sesji. Przy hasłach wymyślanych
+ * przez ludzi zależność jest odwrotna i tam używana jest funkcja spowalniająca.
  */
 public final class TokenHasher {
 
@@ -36,19 +36,19 @@ public final class TokenHasher {
     }
 
     /**
-     * Wariant dla surowych bajtów - odcisk wgranego pliku.
+     * Wariant dla surowych bajtów - używany do odcisku wgranego pliku.
      *
-     * Potrzebny od czasu formatów binarnych: PDF-a nie da się zamienić na String bez
-     * uszkodzenia go, a odcisk musi być liczony z DOKŁADNIE tych bajtów, które pojadą
-     * do dostawcy. Dla plików tekstowych wynik jest identyczny z wariantem powyżej,
-     * bo tamten po prostu koduje łańcuch do UTF-8 i woła tę metodę.
+     * Konieczny przy formatach binarnych, których nie da się zamienić na tekst bez uszkodzenia,
+     * a odcisk musi być liczony dokładnie z tych bajtów, które trafią do dostawcy. Dla plików
+     * tekstowych wynik jest identyczny z wariantem powyżej, bo tamten koduje łańcuch do UTF-8
+     * i woła tę metodę.
      */
     public static String sha256Hex(byte[] content) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             return HexFormat.of().formatHex(digest.digest(content));
         } catch (NoSuchAlgorithmException e) {
-            // Nie wystąpi - SHA-256 jest wymagane przez specyfikację każdej JVM
+            // Nie wystąpi - obecność tego algorytmu jest wymagana przez specyfikację każdej JVM.
             throw new IllegalStateException("Brak algorytmu SHA-256", e);
         }
     }

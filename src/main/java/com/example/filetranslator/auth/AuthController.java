@@ -102,7 +102,7 @@ public class AuthController {
 
         authService.resetPassword(request.token(), request.password());
 
-        // Ciasteczka czyścimy, bo reset unieważnił wszystkie sesje po stronie serwera.
+        // Ciasteczka są czyszczone, bo reset unieważnił wszystkie sesje po stronie serwera.
         // Zostawienie ich oznaczałoby, że przeglądarka dalej wysyła martwe tokeny
         // i użytkownik dostaje 401 zamiast czystego ekranu logowania.
         response.addHeader(HttpHeaders.SET_COOKIE, cookieService.clearAccessTokenCookie().toString());
@@ -153,10 +153,10 @@ public class AuthController {
             HttpServletResponse response) {
 
         if (refreshToken == null) {
-            // Rzucamy wyjątek zamiast budować pustą odpowiedź 401: GlobalExceptionHandler
-            // zamieni go na ProblemDetail z polem "code", tak samo jak każdy inny błąd API.
-            // Wcześniej był to jedyny endpoint zwracający puste ciało - front wywalał się
-            // na response.json() zamiast dostać czytelny powód.
+            // Wyjątek zamiast pustej odpowiedzi 401: centralny handler
+            // zamienia go na ProblemDetail z polem kodu, tak samo jak każdy inny błąd API,
+            // dzięki czemu frontend zawsze może odczytać ciało odpowiedzi i poznać powód
+            // odmowy zamiast wywalać się na pustej treści.
             throw new JwtAuthenticationException(
                     "Brak tokenu odświeżającego - zaloguj się ponownie", "REFRESH_TOKEN_MISSING");
         }

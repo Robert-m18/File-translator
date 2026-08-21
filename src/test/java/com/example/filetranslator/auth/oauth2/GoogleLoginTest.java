@@ -32,13 +32,13 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  *
  * CZEGO TU NIE MA I DLACZEGO: pełnej wymiany kodu autoryzacyjnego z Google. Wymagałaby
  * postawienia atrapy serwera autoryzacyjnego, a test przechodziłby wtedy przez atrapę,
- * nie przez Google - sprawdzałby więc bibliotekę Springa, a nie nasz kod. Rozgałęzienia,
+ * nie przez Google - sprawdzałby więc bibliotekę frameworka, a nie kod aplikacji. Rozgałęzienia,
  * które są NASZE, siedzą w GoogleOidcUserService.resolve i w handlerze sukcesu i to one
  * są tu wykonywane, na syntetycznym OidcUser.
  *
  * Klasa świadomie NIE używa @TestPropertySource: atrapowy klient OAuth2 stoi
  * w application-test.yml, więc kontekst jest ten sam co dla reszty suite. Osobny
- * kontekst kosztowałby własną pulę połączeń, a próg max_connections PostgreSQL-a
+ * kontekst kosztuje własną pulę połączeń, a limit połączeń bazy jest wspólny
  * został tu już raz przekroczony przez dołożenie jednej klasy testowej.
  */
 @SpringBootTest

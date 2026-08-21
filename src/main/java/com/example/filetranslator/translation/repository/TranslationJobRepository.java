@@ -30,38 +30,35 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * Dostęp do zleceń tłumaczenia.
+ * Dostęp do zleceń tłumaczenia: kolejka dla wykonawcy, odczyty dla API i zapytania retencyjne.
  *
- * Dwie zasady obowiązujące w całej tej klasie:
+ * W całej klasie obowiązują dwie zasady:
  *
- * 1. KAŻDY odczyt dla użytkownika bierze userId do WHERE. Nigdy "pobierz po id i porównaj
- *    właściciela w kodzie" - wtedy 404 i 403 są rozróżnialne z zewnątrz i API daje się użyć
- *    do sprawdzania, które identyfikatory istnieją. Tak samo jak moduł auth nie zdradza,
- *    które adresy email są zarejestrowane.
+ * 1. Każdy odczyt wykonywany dla użytkownika ma userId w warunku WHERE, zamiast pobierać wiersz
+ *    po identyfikatorze i porównywać właściciela w kodzie. Dzięki temu cudze zlecenie jest
+ *    nieodróżnialne od nieistniejącego i API nie pozwala sprawdzać, które identyfikatory istnieją.
  *
- * 2. Odczyty prezentacyjne idą przez projekcje, nie przez encję. TranslationJob niesie dwie
- *    kolumny po ~1 MB i pobranie go po to, żeby pokazać status, czyta całą treść pliku.
+ * 2. Odczyty prezentacyjne korzystają z projekcji, nie z encji. Encja zlecenia niesie komplet
+ *    kolumn technicznych, a projekcja czyta wyłącznie to, co faktycznie trafia do odpowiedzi.
  */
 @Repository
 public interface TranslationJobRepository extends JpaRepository<TranslationJob, Long> {
 
     /**
-     * Zlecenia gotowe do wzięcia - od razu zablokowane dla tej instancji.
+     * Zwraca zlecenia gotowe do wykonania i od razu blokuje je dla tej instancji.
      *
-     * FOR UPDATE SKIP LOCKED (tak Hibernate tłumaczy PESSIMISTIC_WRITE z limitem blokady -2)
-     * sprawia, że druga instancja czytająca w tym samym momencie przeskoczy zajęte wiersze
-     * zamiast czekać albo odczytać ten sam komplet. Ta sama mechanika co
-     * OutboxMessageRepository.findReadyToSend - tam jest też pełne uzasadnienie i uwaga
-     * o tym, że na PostgreSQL wychodzi z tego "for no key update ... skip locked".
+     * Klauzula FOR UPDATE SKIP LOCKED (tak Hibernate tłumaczy PESSIMISTIC_WRITE z limitem
+     * blokady -2) sprawia, że druga instancja czytająca w tym samym momencie pomija zajęte
+     * wiersze zamiast czekać lub odczytać ten sam komplet. Dwie instancje pobierają więc
+     * rozłączne paczki zleceń.
      *
-     * PROCESSING jest w warunku razem z PENDING i to nie jest przeoczenie: status mówi
-     * użytkownikowi, co się dzieje, a o tym, czy wolno wziąć wiersz, decyduje WYŁĄCZNIE
-     * next_attempt_at. Dzięki temu zlecenie porzucone przez proces, który padł w trakcie
-     * rozmowy z dostawcą, wraca do obiegu po upływie okna rezerwacji, zamiast zostać
-     * w PROCESSING na zawsze.
+     * Status PROCESSING występuje w warunku razem z PENDING celowo: o tym, czy wolno pobrać
+     * wiersz, decyduje wyłącznie next_attempt_at. Dzięki temu zlecenie porzucone przez proces,
+     * który padł w trakcie rozmowy z dostawcą, wraca do obiegu po upływie okna rezerwacji,
+     * zamiast pozostać w PROCESSING na zawsze.
      *
-     * Blokada wisi tylko przez transakcję rezerwacji. Rozmowa z dostawcą toczy się długo
-     * po jej zwolnieniu - blokady bazodanowe nigdy nie obejmują operacji zewnętrznej.
+     * Blokada trwa tylko przez transakcję rezerwacji - rozmowa z dostawcą toczy się po jej
+     * zwolnieniu, bo blokada bazodanowa nigdy nie obejmuje operacji zewnętrznej.
      */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "-2")) // org.hibernate.Timeouts.SKIP_LOCKED
@@ -76,13 +73,14 @@ public interface TranslationJobRepository extends JpaRepository<TranslationJob, 
 
     /**
      * Rezerwuje odczytane zlecenia: przesuwa next_attempt_at w przyszłość, podbija licznik
-     * podejść i przestawia status na PROCESSING. Musi lecieć w tej samej transakcji co
-     * findClaimable - to blokada z odczytu gwarantuje, że nikt nie wszedł pomiędzy.
+     * podejść i ustawia status PROCESSING.
      *
-     * Warunek na status i next_attempt_at zostaje mimo blokady: kosztuje tyle co nic,
-     * a chroni przed wzięciem wiersza, który zmienił stan między odczytem a UPDATE-em.
+     * Musi wykonać się w tej samej transakcji co findClaimable, ponieważ to blokada z odczytu
+     * gwarantuje, że między odczytem a rezerwacją nikt nie wszedł. Powtórzony warunek na status
+     * i next_attempt_at kosztuje tyle co nic, a chroni przed zarezerwowaniem wiersza, który
+     * zmienił stan mimo blokady.
      *
-     * @return ile wierszy faktycznie zarezerwowano
+     * @return liczba faktycznie zarezerwowanych wierszy
      */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""
@@ -100,11 +98,13 @@ public interface TranslationJobRepository extends JpaRepository<TranslationJob, 
               @Param("reservedUntil") Instant reservedUntil);
 
     /**
-     * billedChars zapisywane RAZEM z wynikiem, bo dopiero tutaj wiadomo, czy dostawca był
-     * wołany. Wartość ustawiona przy przyjęciu zlecenia jest tylko przewidywaniem: gotowy
-     * wiersz mógł w międzyczasie zostać skasowany przez użytkownika albo wygaszony przez
-     * retencję, a wtedy zlecenie przewidziane jako darmowe jednak poszło do dostawcy i musi
-     * zostać naliczone.
+     * Zapisuje wynik zlecenia i kończy je statusem DONE.
+     *
+     * Liczba rozliczonych znaków zapisywana jest razem z wynikiem, ponieważ dopiero tutaj
+     * wiadomo, czy dostawca był wołany. Wartość ustawiona przy przyjęciu zlecenia jest jedynie
+     * przewidywaniem: gotowy wiersz mógł w międzyczasie zostać skasowany przez użytkownika albo
+     * usunięty przez retencję, a wtedy zlecenie przewidziane jako darmowe jednak trafiło do
+     * dostawcy i musi zostać naliczone.
      */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""
@@ -132,10 +132,9 @@ public interface TranslationJobRepository extends JpaRepository<TranslationJob, 
     /**
      * Zapamiętuje uchwyt do dokumentu wgranego u dostawcy.
      *
-     * WŁASNA, NATYCHMIASTOWA transakcja u wołającego jest tu warunkiem sensu: uchwyt musi
-     * zostać zatwierdzony ZARAZ po wgraniu, bo od tej chwili dokument jest już opłacony.
-     * Zapis dopiero razem z wynikiem oznaczałby, że proces padający w trakcie tłumaczenia
-     * traci opłacony dokument i wgrywa go od nowa.
+     * Wołający zatwierdza tę zmianę we własnej, natychmiastowej transakcji, ponieważ od chwili
+     * wgrania dokument jest już opłacony. Zapis dopiero razem z wynikiem oznaczałby, że proces
+     * przerwany w trakcie tłumaczenia traci opłacony dokument i wgrywa go od nowa.
      */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""
@@ -147,7 +146,7 @@ public interface TranslationJobRepository extends JpaRepository<TranslationJob, 
                            @Param("documentId") String documentId,
                            @Param("documentKey") String documentKey);
 
-    /** Zapomina uchwyt - dokumentu nie ma już u dostawcy, więc kolejne podejście wgra go od nowa. */
+    /** Czyści uchwyt, gdy dokumentu nie ma już u dostawcy - kolejne podejście wgra go od nowa. */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""
             update TranslationJob j
@@ -157,15 +156,14 @@ public interface TranslationJobRepository extends JpaRepository<TranslationJob, 
     int clearDocumentHandle(@Param("id") Long id);
 
     /**
-     * Odkłada zlecenie do NASTĘPNEGO odpytania dostawcy, nie licząc tego jako podejścia.
+     * Odkłada zlecenie do następnego odpytania dostawcy, nie licząc tego jako podejścia.
      *
-     * ODEJMOWANIE attempts NIE JEST SZTUCZKĄ, tylko przywróceniem znaczenia tej kolumny.
-     * Rezerwacja (claim) podbija licznik przy każdym wzięciu zlecenia, bo w normalnym trybie
-     * wzięcie = próba przetłumaczenia. Przy dokumencie wzięcie bywa wyłącznie sprawdzeniem
-     * "czy już gotowe", a dostawca może tłumaczyć dłużej niż max-attempts takich sprawdzeń.
-     * Bez tego odjęcia dokument tłumaczony trzy minuty zostałby PORZUCONY jako nieudany,
-     * mimo że po drugiej stronie wszystko szło dobrze - a licznik przestałby znaczyć
-     * "nieudane próby" i zaczął znaczyć "ile razy zajrzeliśmy".
+     * Odjęcie licznika przywraca kolumnie jej znaczenie. Rezerwacja podbija licznik przy każdym
+     * pobraniu zlecenia, bo w trybie tekstowym pobranie jest równoznaczne z próbą tłumaczenia.
+     * Przy dokumencie pobranie bywa wyłącznie sprawdzeniem gotowości, a dostawca może tłumaczyć
+     * dłużej niż dopuszczalna liczba podejść. Bez odjęcia dokument tłumaczony kilka minut
+     * zostałby porzucony jako nieudany, a kolumna zaczęłaby znaczyć "liczba zajrzeń" zamiast
+     * "liczba nieudanych prób".
      */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""
@@ -175,7 +173,7 @@ public interface TranslationJobRepository extends JpaRepository<TranslationJob, 
             """)
     int markPolling(@Param("id") Long id, @Param("nextAttemptAt") Instant nextAttemptAt);
 
-    /** Porażka, ale próbujemy dalej - wiersz wraca do PENDING z odsuniętym next_attempt_at. */
+    /** Odnotowuje porażkę z zamiarem ponowienia - wiersz wraca do PENDING z odsuniętym terminem. */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""
             update TranslationJob j
@@ -188,6 +186,7 @@ public interface TranslationJobRepository extends JpaRepository<TranslationJob, 
                   @Param("nextAttemptAt") Instant nextAttemptAt,
                   @Param("error") String error);
 
+    /** Kończy zlecenie niepowodzeniem - bez dalszych podejść. */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""
             update TranslationJob j
@@ -200,6 +199,7 @@ public interface TranslationJobRepository extends JpaRepository<TranslationJob, 
                    @Param("error") String error,
                    @Param("now") Instant now);
 
+    /** Stan pojedynczego zlecenia właściciela - do odpytywania o postęp. */
     @Query("""
             select new com.example.filetranslator.translation.dto.TranslationJobResponse(
                 j.id, j.originalFilename, j.sourceLang, j.targetLang, j.status,
@@ -212,8 +212,8 @@ public interface TranslationJobRepository extends JpaRepository<TranslationJob, 
     /**
      * Lista zleceń właściciela, najnowsze pierwsze.
      *
-     * countQuery podany jawnie: przy zapytaniu z wyrażeniem konstruktora Spring Data musiałby
-     * je przepisać na count, co jest źródłem zaskakujących błędów - łatwiej napisać wprost.
+     * Zapytanie zliczające podane jest jawnie, ponieważ przy wyrażeniu konstruktora automatyczne
+     * przepisanie zapytania na count bywa zawodne.
      */
     @Query(value = """
             select new com.example.filetranslator.translation.dto.TranslationJobResponse(
@@ -227,16 +227,13 @@ public interface TranslationJobRepository extends JpaRepository<TranslationJob, 
     Page<TranslationJobResponse> findSummaries(@Param("userId") Long userId, Pageable pageable);
 
     /**
-     * Dane potrzebne do powiadomienia właściciela, zebrane jednym zapytaniem.
+     * Zbiera jednym zapytaniem dane potrzebne do powiadomienia właściciela o gotowym tłumaczeniu.
      *
-     * DLACZEGO NIE job.getUser() W WORKERZE: encja przychodzi tam z transakcji REZERWACJI,
-     * która dawno się zakończyła, a pole user jest leniwym proxy. Sięgnięcie po adres email
-     * poza tamtą sesją kończy się LazyInitializationException - i to na ścieżce, która
-     * wykonuje się dopiero po udanym tłumaczeniu, czyli najpóźniej jak się da.
-     *
-     * Ponowne pobranie encji też nie jest odpowiedzią: wciągnęłoby z powrotem treść źródła
-     * i wyniku, czyli do 768 KB tekstu po to, żeby odczytać adres i nazwę pliku. Ta projekcja
-     * czyta wyłącznie kolumny, które faktycznie jadą do powiadomienia.
+     * Projekcja zastępuje odczyt przez job.getUser(), ponieważ encja, którą dysponuje wykonawca,
+     * pochodzi z zakończonej już transakcji rezerwacji, a pole user jest leniwym proxy - odczyt
+     * adresu poza tamtą sesją kończy się wyjątkiem, i to na ścieżce wykonywanej dopiero po
+     * udanym tłumaczeniu. Ponowne pobranie całej encji byłoby droższe bez żadnego zysku:
+     * projekcja czyta wyłącznie kolumny, które trafiają do powiadomienia.
      */
     @Query("""
             select new com.example.filetranslator.translation.TranslationCompletedEvent(
@@ -246,7 +243,7 @@ public interface TranslationJobRepository extends JpaRepository<TranslationJob, 
             """)
     Optional<TranslationCompletedEvent> findCompletedEvent(@Param("id") Long id);
 
-    /** Wskazanie na wynik: klucz obiektu plus dane do nagłówka pobierania. */
+    /** Wskazanie na wynik: klucz obiektu wraz z danymi potrzebnymi do nagłówka pobierania. */
     @Query("""
             select new com.example.filetranslator.translation.dto.TranslationResultView(
                 j.status, j.originalFilename, j.targetLang, j.fileType, j.resultObjectKey)
@@ -256,35 +253,35 @@ public interface TranslationJobRepository extends JpaRepository<TranslationJob, 
     Optional<TranslationResultView> findResult(@Param("id") Long id, @Param("userId") Long userId);
 
     /**
-     * Klucz źródła własnego zlecenia - do wyliczenia prefiksu przy kasowaniu plików.
+     * Klucz pliku źródłowego własnego zlecenia - służy do wyliczenia prefiksu przy kasowaniu.
      *
-     * userId w warunku jak wszędzie: bez niego kasowanie dałoby się skierować na cudzy
-     * prefiks, czyli obejść całą ochronę per wiersz jednym parametrem w adresie.
+     * Warunek na userId jest tu równie istotny co przy odczytach: bez niego kasowanie dałoby się
+     * skierować na cudzy prefiks, czyli obejść ochronę per wiersz jednym parametrem w adresie.
      */
     @Query("select j.sourceObjectKey from TranslationJob j where j.id = :id and j.user.id = :userId")
     Optional<String> findSourceKey(@Param("id") Long id, @Param("userId") Long userId);
 
     /**
-     * Klucze źródeł zleceń starszych niż podany moment - do skasowania ich plików przez retencję.
+     * Klucze plików źródłowych zleceń starszych niż podany moment - dla zadania retencyjnego.
      *
-     * Osobny odczyt przed kasowaniem wierszy, bo po nim nie ma już skąd wziąć prefiksów.
-     * Reguła wygasania na kubełku i tak jest tu siatką bezpieczeństwa, ale nie zastępuje
-     * tego kroku: gdyby ktoś skrócił app.translation.retention, wiersze zniknęłyby wcześniej
-     * niż pliki, a plików nie miałby już kto wskazać.
+     * Odczyt musi poprzedzać kasowanie wierszy, ponieważ po nim nie ma już skąd wziąć prefiksów.
+     * Reguła wygasania na kubełku jest siatką bezpieczeństwa, ale nie zastępuje tego kroku:
+     * po skróceniu retencji aplikacji wiersze zniknęłyby wcześniej niż pliki, a plików nie
+     * miałby już kto wskazać.
      */
     @Query("select j.sourceObjectKey from TranslationJob j where j.createdAt < :cutoff")
     List<String> findSourceKeysCreatedBefore(@Param("cutoff") Instant cutoff);
 
     /**
-     * Ile znaków użytkownik faktycznie WYDAŁ U DOSTAWCY od podanego momentu - pod dobowy limit.
+     * Liczba znaków faktycznie wydanych u dostawcy od podanego momentu - podstawa dobowego limitu.
      *
-     * Sumuje billedChars, nie charCount, i to jest cała różnica: zlecenie zaspokojone z cache'a
-     * ma tu 0. Sumowanie charCount znaczyło, że powtórka nie płaci za siebie, ale podnosi
-     * licznik NASTĘPNYM zleceniom - czyli naprawdę nowy plik odbijał się od limitu na budżecie,
-     * którego nikt nie wydał. Pełne uzasadnienie: changelog 0009-translation-billed-chars.xml.
+     * Sumuje billedChars, a nie charCount: zlecenie zaspokojone z cache'a ma tu zero. Sumowanie
+     * charCount sprawiałoby, że powtórzony plik nie płaci za siebie, ale podnosi licznik
+     * następnym zleceniom, przez co nowy plik odbijałby się od limitu na budżecie, którego nikt
+     * nie wydał.
      *
-     * coalesce, bo suma z pustego zbioru to NULL, a nie zero: bez tego pierwsze zlecenie
-     * nowego użytkownika wywalałoby się na NullPointerException.
+     * coalesce jest konieczne, bo suma z pustego zbioru to NULL - bez niego pierwsze zlecenie
+     * nowego użytkownika kończyłoby się wyjątkiem.
      */
     @Query("""
             select coalesce(sum(j.billedChars), 0) from TranslationJob j
@@ -293,15 +290,15 @@ public interface TranslationJobRepository extends JpaRepository<TranslationJob, 
     long sumBilledCharsSince(@Param("userId") Long userId, @Param("since") Instant since);
 
     /**
-     * Czy użytkownik ma już gotowe tłumaczenie tej treści - sam fakt, bez treści wyniku.
+     * Sprawdza sam fakt istnienia gotowego tłumaczenia tej treści, bez pobierania wyniku.
      *
-     * To zapytanie leci na ŚCIEŻCE ŻĄDANIA (TranslationService.submit sprawdza nim, czy
-     * naliczyć dobowy limit znaków), a odpowiada wyłącznie na pytanie "czy jest" - kopiowanie
-     * wyniku robi później findCachedFor, już poza żądaniem.
+     * Zapytanie wykonuje się na ścieżce żądania HTTP - decyduje o tym, czy naliczyć dobowy limit
+     * znaków - więc świadomie nie dotyka treści. Kopiowanie wyniku realizuje później
+     * findCachedFor, już poza żądaniem.
      *
-     * Klucz to userId + odcisk + język docelowy + DOSTAWCA. Ten ostatni nie jest ozdobą:
-     * bez niego wynik atrapy (ECHO) zaspokoiłby zlecenie kierowane do DEEPL - jedyny
-     * przypadek, w którym deduplikacja oddaje wynik błędny zamiast szybkiego.
+     * Kluczem jest użytkownik, odcisk treści, język docelowy oraz dostawca. Ten ostatni jest
+     * niezbędny: bez niego wynik atrapy zaspokoiłby zlecenie kierowane do prawdziwego dostawcy,
+     * co jest jedynym przypadkiem, w którym deduplikacja zwraca wynik błędny, a nie tylko szybki.
      */
     @Query("""
             select count(j) > 0 from TranslationJob j
@@ -318,27 +315,26 @@ public interface TranslationJobRepository extends JpaRepository<TranslationJob, 
                          @Param("provider") TranslationProperties.Provider provider);
 
     /**
-     * Gotowy wynik do przepisania na zlecenie o podanym id.
+     * Zwraca gotowy wynik nadający się do przepisania na zlecenie o podanym identyfikatorze.
      *
-     * KLUCZ BIERZE SIĘ Z SAMEGO WIERSZA ZLECENIA (złączenie po user_id, content_hash
-     * i target_lang), a nie z parametrów podanych przez wołającego. Powód jest ten sam,
-     * dla którego istnieje findCompletedEvent: encja, którą trzyma worker, pochodzi
-     * z ZAMKNIĘTEJ transakcji rezerwacji, więc job.getUser() jest tam martwym proxy -
-     * sięgnięcie po identyfikator właściciela działa tylko przez szczegół implementacyjny
-     * Hibernate'a i jest dokładnie tą pułapką, którą ten pakiet już raz rozbroił.
+     * Klucz deduplikacji wyprowadzany jest z samego wiersza zlecenia (złączenie po user_id,
+     * content_hash i target_lang), a nie z parametrów podanych przez wołającego. Powód jest ten
+     * sam co przy findCompletedEvent: encja, którą trzyma wykonawca, pochodzi z zamkniętej
+     * transakcji rezerwacji, więc odczyt właściciela z leniwego proxy działałby wyłącznie
+     * dzięki szczegółowi implementacyjnemu Hibernate'a.
      *
-     * Warunki na status, provider i treść muszą pozostać takie same jak w existsCached.
-     * Rozjazd między nimi znaczyłby, że dobowy limit znaków pomijamy na podstawie trafienia,
-     * którego potem nie ma - czyli zlecenie przyjęte jako darmowe idzie jednak do dostawcy.
+     * Warunki na status, dostawcę i treść muszą pozostać identyczne jak w existsCached. Rozjazd
+     * między nimi oznaczałby pominięcie dobowego limitu na podstawie trafienia, do którego potem
+     * nie dochodzi - czyli zlecenie przyjęte jako darmowe trafiłoby jednak do dostawcy.
      *
-     * done.id <> job.id jest asekuracją: zlecenie w trakcie ma status PROCESSING, więc samo
-     * siebie i tak nie zaspokoi, ale ponowne przepuszczenie wiersza już zakończonego nie ma
-     * prawa zamienić się w kopiowanie wyniku z samego siebie.
+     * Warunek na różne identyfikatory jest asekuracją: zlecenie w trakcie ma status PROCESSING,
+     * więc samo siebie nie zaspokoi, ale ponowne przetworzenie wiersza zakończonego nie może
+     * zamienić się w kopiowanie wyniku z samego siebie.
      *
-     * Wiersze sprzed changesetu 0008 mają content_hash równy NULL, a NULL nie równa się
-     * niczemu - nigdy nie trafią i nie trzeba ich osobno wykluczać.
+     * Wiersze bez odcisku treści nigdy nie trafiają, bo NULL nie równa się niczemu - nie trzeba
+     * ich wykluczać osobnym warunkiem.
      *
-     * List + Limit, bo JPQL nie ma "pierwszego" - ten sam idiom co w findClaimable.
+     * Typ List wraz z parametrem Limit wynika z tego, że JPQL nie ma odpowiednika "pierwszy wiersz".
      */
     @Query("""
             select new com.example.filetranslator.translation.dto.TranslationCacheHit(
@@ -360,17 +356,17 @@ public interface TranslationJobRepository extends JpaRepository<TranslationJob, 
                                             Limit limit);
 
     /**
-     * Kasowanie własnego zlecenia - userId w warunku, żeby nie dało się skasować cudzego.
+     * Kasuje własne zlecenie użytkownika - warunek na userId uniemożliwia skasowanie cudzego.
      *
-     * Kasuje WYŁĄCZNIE wiersz. Pliki usuwa TranslationService po zatwierdzeniu tej
-     * transakcji, i ta kolejność jest odwrotna niż przy tworzeniu - uzasadnienie
-     * niezmiennika przy TranslationService.deleteOwn.
+     * Usuwa wyłącznie wiersz. Pliki kasuje TranslationService po zatwierdzeniu tej transakcji;
+     * kolejność jest odwrotna niż przy tworzeniu, dzięki czemu stanem pośrednim po awarii jest
+     * plik bez wiersza, a nie zlecenie bez treści.
      */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("delete from TranslationJob j where j.id = :id and j.user.id = :userId")
     int deleteOwned(@Param("id") Long id, @Param("userId") Long userId);
 
-    /** Retencja: kasuje zlecenia starsze niż podany moment, niezależnie od statusu. */
+    /** Retencja: kasuje zlecenia starsze niż podany moment, niezależnie od ich statusu. */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("delete from TranslationJob j where j.createdAt < :cutoff")
     int deleteCreatedBefore(@Param("cutoff") Instant cutoff);

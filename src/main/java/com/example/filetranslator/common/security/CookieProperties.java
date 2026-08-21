@@ -14,10 +14,9 @@ import java.time.Duration;
 /**
  * Ustawienia ciasteczek z tokenami (prefiks app.cookie w application.yml).
  *
- * Wyniesione do konfiguracji, bo różnią się między środowiskami: na localhost
- * lecimy po http i Secure musi być wyłączone, na produkcji odwrotnie.
- * Wcześniej były zaszyte na sztywno w CookieService, przez co logowanie
- * na dev w ogóle nie działało - przeglądarka odrzucała ciasteczko Secure po http.
+ * Wyniesione do konfiguracji, bo różnią się między środowiskami: lokalnie ruch idzie po HTTP
+ * i atrybut Secure musi być wyłączony, bo inaczej przeglądarka odrzuci ciasteczko;
+ * na produkcji jest odwrotnie i ciasteczko ma latać wyłącznie po HTTPS.
  *
  * @Validated + adnotacje walidacyjne sprawiają, że literówka w yml-u wywala
  * aplikację przy starcie, a nie dopiero przy pierwszym logowaniu.

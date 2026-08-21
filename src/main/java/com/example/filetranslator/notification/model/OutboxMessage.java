@@ -31,7 +31,7 @@ public class OutboxMessage {
         /** Do wysłania (także po nieudanej próbie - wtedy z odsuniętym nextRetryAt). */
         NEW,
         SENT,
-        /** Poddaliśmy się po maksymalnej liczbie prób. Wymaga interwencji człowieka. */
+        /** Porzucona po wyczerpaniu maksymalnej liczby prób. Wymaga interwencji człowieka. */
         FAILED
     }
 

@@ -34,7 +34,14 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * Service do obsługi autentykacji - login, rejestracja, reset hasła.
+ * Uwierzytelnianie i cykl życia konta: logowanie, rejestracja z potwierdzeniem adresu, reset
+ * hasła, odświeżanie i kończenie sesji.
+ *
+ * Dwie zasady obowiązują w całej klasie. Po pierwsze, żadna odpowiedź nie zdradza, czy dany
+ * adres ma konto - rejestracja i reset hasła odpowiadają identycznie w obu przypadkach, bo są
+ * to klasyczne miejsca wycieku listy użytkowników. Po drugie, zamówienia maili trafiają do
+ * skrzynki nadawczej w tej samej transakcji co operacja, którą opisują, dzięki czemu nie da się
+ * wysłać wiadomości o zdarzeniu, które zostało wycofane.
  */
 @Slf4j
 @Service
@@ -44,9 +51,9 @@ public class AuthService {
     private static final Duration REGISTRATION_VALIDITY = Duration.ofHours(24);
 
     /**
-     * Link do resetu hasła żyje krótko - godzinę, nie dobę jak link rejestracyjny.
-     * Różnica jest celowa: token resetu jest pełnym kluczem do istniejącego konta,
-     * a token rejestracyjny tylko aktywuje konto, którego jeszcze nie ma.
+     * Link do resetu hasła żyje godzinę, a nie dobę jak link rejestracyjny. Różnica jest celowa:
+     * token resetu jest pełnym kluczem do istniejącego konta, a token rejestracyjny aktywuje
+     * konto, którego jeszcze nie ma.
      */
     private static final Duration PASSWORD_RESET_VALIDITY = Duration.ofHours(1);
 
@@ -60,21 +67,20 @@ public class AuthService {
     private final MailOutbox mailOutbox;
 
     /**
-     * Celowo BEZ @Transactional.
+     * Weryfikuje poświadczenia i wystawia parę tokenów, rejestrując przy tym sesję.
      *
-     * Transakcja obejmowałaby porównanie hasha BCrypt, a to z definicji operacja
-     * kosztowna (kilkadziesiąt-kilkaset ms). Przez ten czas połączenie z puli byłoby
-     * zajęte, choć nic z bazy nie jest w tym momencie potrzebne - przy serii logowań
-     * pula wysycha na czekaniu na procesor, a nie na bazę.
+     * Metoda celowo nie jest transakcyjna. Transakcja obejmowałaby porównanie hasha BCrypt,
+     * czyli operację z założenia kosztowną obliczeniowo, i przez cały ten czas zajmowałaby
+     * połączenie z puli, mimo że nic z bazy nie jest wtedy potrzebne - przy serii logowań pula
+     * wysychałaby na oczekiwaniu na procesor.
      *
-     * Nie ma tu też czego rollbackować: jedyny zapis to rejestracja sesji, a
-     * RefreshTokenService.startSession ma własną transakcję. Licznik nieudanych logowań
-     * jest po stronie LoginAttemptService i tak czy tak działa w REQUIRES_NEW,
-     * bo musi przeżyć wyjątek, który go wywołał.
+     * Nie ma tu też czego wycofywać: jedynym zapisem jest rejestracja sesji, która ma własną
+     * transakcję, a licznik nieudanych logowań działa w osobnej transakcji, bo musi przetrwać
+     * wyjątek, który go wywołał.
      */
     public TokenPair login(String email, String password) {
-        // Rzuca BadCredentialsException / DisabledException / LockedException -
-        // wszystkie mapowane centralnie w GlobalExceptionHandler.
+        // Rzuca wyjątki opisujące złe poświadczenia, konto niepotwierdzone i zablokowane -
+        // wszystkie mapowane centralnie na odpowiedzi HTTP.
         Authentication auth = authenticationManager.authenticate(
                 new UsernamePasswordAuthenticationToken(email, password)
         );
@@ -82,13 +88,12 @@ public class AuthService {
         String accessToken = jwtUtil.generateToken(auth.getName());
         String refreshToken = jwtUtil.generateRefreshToken(auth.getName());
 
-        // Token odświeżający jest rejestrowany w bazie - dopiero to pozwala go później
-        // unieważnić (wylogowanie, wykrycie kradzieży). Sam JWT jest nieodwoływalny.
+        // Rejestracja tokenu odświeżającego w bazie jest tym, co pozwala go później unieważnić
+        // przy wylogowaniu lub wykryciu kradzieży. Sam token JWT jest nieodwoływalny.
         refreshTokenService.startSession(auth.getName(), refreshToken);
 
-        // Bez adresu email w logu - to dane osobowe, a logi trafiają do systemów,
-        // które mają zwykle szerszy dostęp niż sama baza. Do powiązania wpisu
-        // z konkretnym żądaniem służy traceId dokładany przez TraceIdFilter.
+        // Bez adresu w logu - to dana osobowa, a logi trafiają do systemów o szerszym dostępie
+        // niż baza. Powiązanie wpisu z żądaniem zapewnia identyfikator żądania.
         log.info("Poprawne logowanie użytkownika");
         return new TokenPair(accessToken, refreshToken);
     }
@@ -97,8 +102,7 @@ public class AuthService {
      * Przyjmuje zgłoszenie rejestracji. Konto powstaje dopiero przy potwierdzeniu adresu.
      *
      * Metoda nigdy nie sygnalizuje, czy adres jest już zarejestrowany - odpowiedź jest
-     * identyczna w każdym przypadku. Poprzednia wersja rzucała tu 409, co zamieniało
-     * endpoint w narzędzie do sprawdzania, kto ma u nas konto.
+     * identyczna w każdym przypadku, więc endpointu nie da się użyć do sprawdzania, kto ma konto.
      */
     @Transactional
     public void register(UserRequestDTO dto) {
@@ -106,10 +110,10 @@ public class AuthService {
 
         if (userService.existsByEmail(dto.email())) {
             /*
-             * Konto już istnieje, więc nie zakładamy zgłoszenia. Nie odpowiadamy też
-             * błędem - informację dostaje właściciel skrzynki, a nie ten, kto wysłał
-             * żądanie. Jeśli to pomyłka prawowitego użytkownika, mail podpowie mu
-             * zalogowanie albo reset hasła; jeśli ktoś sonduje adresy, nie dowie się nic.
+             * Konto już istnieje, więc zgłoszenie nie powstaje. Informację dostaje właściciel
+             * skrzynki, a nie autor żądania: jeśli jest to pomyłka prawowitego użytkownika, mail
+             * podpowiada zalogowanie albo reset hasła, a jeśli ktoś sonduje adresy, nie dowiaduje
+             * się niczego.
              */
             log.info("Zgłoszenie na adres z istniejącym kontem - wysyłamy powiadomienie zamiast zakładać wpis");
             mailOutbox.enqueueAccountExists(dto.email());
@@ -117,12 +121,12 @@ public class AuthService {
         }
 
         /*
-         * Każde zgłoszenie to NOWY wiersz - nie nadpisujemy istniejących zgłoszeń na ten
-         * sam adres. To jest cała istota tego modelu: gdyby zgłoszenia się nadpisywały,
-         * obca osoba mogłaby podmienić hash hasła w trwającej rejestracji, a ofiara,
-         * klikając najnowszy link ze swojej skrzynki, aktywowałaby konto z cudzym hasłem.
-         * Tutaj potwierdzenie aktywuje dokładnie to zgłoszenie, którego token przyszedł
-         * w klikniętym linku, więc obce zgłoszenia leżą obok i wygasają nieużyte.
+         * Każde zgłoszenie tworzy nowy wiersz; zgłoszenia na ten sam adres nie są nadpisywane.
+         * Na tym polega cały ten model: przy nadpisywaniu obca osoba mogłaby podmienić hash hasła
+         * w trwającej rejestracji, a ofiara, klikając najnowszy link ze swojej skrzynki,
+         * aktywowałaby konto z cudzym hasłem. Tutaj potwierdzenie aktywuje dokładnie to
+         * zgłoszenie, którego token przyszedł w klikniętym linku, więc obce zgłoszenia leżą obok
+         * i wygasają nieużyte.
          */
         String rawToken = UUID.randomUUID().toString();
         Instant now = Instant.now();
@@ -136,32 +140,29 @@ public class AuthService {
                 now.plus(REGISTRATION_VALIDITY)
         ));
 
-        // Zamówienie maila trafia do skrzynki nadawczej w TEJ SAMEJ transakcji co zgłoszenie.
-        // Gdyby coś wywaliło wyjątek wyżej, wycofa się jedno i drugie: nie wyślemy linku
-        // do rejestracji, która nie powstała. A gdy transakcja przejdzie, zamówienie jest
-        // już trwałe - awaria SMTP albo restart poda nie kasują go, tylko odkładają.
+        // Zamówienie maila trafia do skrzynki nadawczej w tej samej transakcji co zgłoszenie.
+        // Wyjątek wyżej wycofuje jedno i drugie, więc link do rejestracji, która nie powstała,
+        // nie zostanie wysłany. Po zatwierdzeniu zamówienie jest trwałe - awaria serwera poczty
+        // ani restart aplikacji go nie kasują, tylko odkładają wysyłkę.
         mailOutbox.enqueueVerification(dto.email(), dto.name(), rawToken);
     }
 
     /**
-     * Potwierdza adres i zakłada konto z danych zgłoszenia.
+     * Potwierdza adres i zakłada konto na podstawie danych ze zgłoszenia.
      */
     @Transactional
     public void confirmEmail(String rawToken) {
         /*
-         * Nieznany token to DWA nieodróżnialne przypadki: token zmyślony albo token, który
-         * chwilę temu zadziałał. Potwierdzenie kasuje wszystkie zgłoszenia na dany adres
-         * (patrz niżej), więc udany link jest po użyciu dokładnie tak samo nieznany jak
-         * podrobiony. Najczęstszym wyzwalaczem jest zwykłe odświeżenie strony potwierdzenia,
-         * czyli sytuacja, w której wszystko poszło DOBRZE - dlatego komunikat wymienia obie
-         * możliwości, zamiast wybierać tę gorszą i straszyć użytkownika awarią. Reset hasła
-         * ma ten sam komunikat, ale tam stany da się odróżnić, bo used_at zostaje w tabeli
-         * do wygaśnięcia.
+         * Nieznany token oznacza dwa nierozróżnialne przypadki: token zmyślony albo token, który
+         * przed chwilą zadziałał. Potwierdzenie kasuje wszystkie zgłoszenia na dany adres, więc
+         * użyty link jest potem tak samo nieznany jak podrobiony. Najczęstszym wyzwalaczem jest
+         * odświeżenie strony potwierdzenia, czyli sytuacja, w której wszystko poszło dobrze -
+         * dlatego komunikat wymienia obie możliwości zamiast straszyć użytkownika awarią.
          *
-         * Czego serwer powiedzieć NIE MOŻE: "konto jest aktywne, zaloguj się". Dla linku
-         * wygasłego albo zmyślonego byłoby to nieprawdą i odesłałoby użytkownika do konta,
-         * które nie istnieje. Ten komunikat należy do frontu - on jeden wie, że jego własne
-         * potwierdzenie właśnie się udało, i dlatego po sukcesie zdejmuje token z adresu.
+         * Serwer nie może w tym miejscu odpowiedzieć "konto jest aktywne, zaloguj się": dla linku
+         * wygasłego albo zmyślonego byłoby to nieprawdą i odesłałoby użytkownika do nieistniejącego
+         * konta. Taki komunikat należy do frontendu, który jako jedyny wie, że jego własne
+         * potwierdzenie właśnie się powiodło.
          */
         PendingRegistration pending = pendingRegistrationRepository
                 .findByTokenHash(TokenHasher.sha256Hex(rawToken))
@@ -175,32 +176,32 @@ public class AuthService {
 
         if (userService.existsByEmail(pending.getEmail())) {
             /*
-             * Konto powstało już z innego zgłoszenia na ten adres (np. użytkownik
-             * rejestrował się dwa razy i kliknął oba linki). Nie ruszamy hasła istniejącego
-             * konta - nadpisanie go danymi ze starszego zgłoszenia byłoby cichą zmianą
-             * hasła. Kasujemy tylko zbędne zgłoszenie.
+             * Konto powstało już z innego zgłoszenia na ten adres - na przykład użytkownik
+             * rejestrował się dwukrotnie i kliknął oba linki. Hasło istniejącego konta pozostaje
+             * nietknięte, bo nadpisanie go danymi ze starszego zgłoszenia byłoby cichą zmianą
+             * hasła; kasowane jest wyłącznie zbędne zgłoszenie.
              */
             pendingRegistrationRepository.deleteAllByEmail(pending.getEmail());
             log.info("Potwierdzenie dla adresu, na którym konto już istnieje - zgłoszenie usunięte");
             return;
         }
 
-        // Hasło jest już zahashowane w poczekalni - przenosimy hash, nie kodujemy po raz drugi.
+        // Hasło jest już zahashowane w poczekalni - hash zostaje przeniesiony, a nie zakodowany
+        // po raz drugi, bo dałoby to hash hasha i uniemożliwiło logowanie.
         User created = userService.createConfirmedUser(
                 pending.getEmail(), pending.getName(), pending.getPasswordHash());
 
-        // Kasujemy WSZYSTKIE zgłoszenia na ten adres, nie tylko wykorzystane. Pozostałe
-        // (także obce) straciły sens, bo adres jest od teraz zajęty przez istniejące konto.
+        // Kasowane są wszystkie zgłoszenia na ten adres, nie tylko wykorzystane: pozostałe,
+        // również obce, straciły sens, bo adres jest od tej chwili zajęty przez istniejące konto.
         pendingRegistrationRepository.deleteAllByEmail(pending.getEmail());
 
         log.info("Email potwierdzony, konto utworzone (id={})", created.getId());
     }
 
     /**
-     * Rozpoczyna reset hasła.
+     * Rozpoczyna reset hasła: unieważnia poprzednie linki i wysyła nowy.
      *
-     * Tak jak rejestracja: odpowiedź jest identyczna dla adresu znanego i nieznanego.
-     * Endpoint resetu hasła jest klasycznym miejscem wycieku listy użytkowników.
+     * Podobnie jak przy rejestracji, odpowiedź jest identyczna dla adresu znanego i nieznanego.
      */
     @Transactional
     public void requestPasswordReset(String email) {
@@ -214,8 +215,8 @@ public class AuthService {
         User user = found.get();
         Instant now = Instant.now();
 
-        // W obiegu ma być najwyżej jeden żywy link. Bez tego seria żądań zostawia stos
-        // ważnych tokenów, a każdy z nich jest pełnym kluczem do konta.
+        // W obiegu ma pozostawać najwyżej jeden ważny link. Bez unieważnienia poprzednich seria
+        // żądań zostawiałaby stos ważnych tokenów, z których każdy jest pełnym kluczem do konta.
         passwordResetTokenRepository.invalidateAllForUser(user.getId(), now);
 
         String rawToken = UUID.randomUUID().toString();
@@ -233,6 +234,9 @@ public class AuthService {
 
     /**
      * Ustawia nowe hasło na podstawie jednorazowego tokenu.
+     *
+     * Poza zmianą hasła metoda robi dwie rzeczy konieczne dla bezpieczeństwa konta: unieważnia
+     * wszystkie sesje i zeruje licznik nieudanych logowań.
      */
     @Transactional
     public void resetPassword(String rawToken, String newPassword) {
@@ -241,8 +245,9 @@ public class AuthService {
                 .orElseThrow(() -> new InvalidTokenException("Nieprawidłowy link do resetu hasła"));
 
         if (token.isUsed()) {
-            // Osobny komunikat od "nieprawidłowy": użytkownik wie, że reset się udał,
-            // i nie próbuje w panice kolejnych rzeczy.
+            // Komunikat odrębny od "nieprawidłowy link": użytkownik wie, że reset się powiódł,
+            // i nie próbuje w panice kolejnych rzeczy. Rozróżnienie jest możliwe, bo data użycia
+            // zostaje w tabeli aż do wygaśnięcia tokenu.
             throw new InvalidTokenException("Ten link został już wykorzystany");
         }
 
@@ -252,27 +257,32 @@ public class AuthService {
 
         User user = token.getUser();
         userService.updatePassword(user, passwordEncoder.encode(newPassword));
-        token.setUsedAt(Instant.now()); // encja zarządzana - dirty checking zapisze zmianę
+        token.setUsedAt(Instant.now()); // encja zarządzana - zmiana zapisze się przy commicie
 
         /*
-         * Reset hasła MUSI zerwać istniejące sesje. Jeśli powodem resetu było przejęcie
-         * konta, to napastnik ma ważny token odświeżający - bez tego kroku zmiana hasła
-         * niczego mu nie odbiera i zostaje w koncie na kolejne 7 dni.
+         * Reset hasła musi unieważnić istniejące sesje. Jeżeli jego powodem było przejęcie konta,
+         * napastnik dysponuje ważnym tokenem odświeżającym - bez tego kroku zmiana hasła niczego
+         * mu nie odbiera i pozostaje w koncie przez cały tydzień ważności tokenu.
          */
         int revoked = refreshTokenService.revokeAllSessions(user.getId());
 
-        // Zerujemy też blokadę: użytkownik, który zapomniał hasła, zwykle najpierw
-        // zdążył je pomylić kilka razy i zastałby konto zablokowane zaraz po resecie.
+        // Licznik nieudanych logowań również zostaje wyzerowany: użytkownik, który zapomniał
+        // hasła, zwykle najpierw pomylił je kilka razy i zastałby konto zablokowane zaraz po
+        // udanym resecie.
         userService.clearLoginFailures(user.getEmail());
 
         log.info("Hasło zmienione (id={}), unieważniono {} token(ów) odświeżających",
                 user.getId(), revoked);
     }
 
+    /**
+     * Wymienia token odświeżający na nową parę tokenów, obracając przy tym sesję.
+     */
     @Transactional
     public TokenPair refreshToken(String refreshToken) {
-        // 1. Kryptografia: podpis i typ tokenu. Odsiewa tokeny podrobione i access tokeny
-        //    podstawione w miejsce odświeżających, zanim w ogóle ruszymy bazę.
+        // Najpierw kryptografia: podpis i typ tokenu. Odsiewa tokeny podrobione oraz tokeny
+        // dostępowe podstawione w miejsce odświeżających, zanim wykonane zostanie jakiekolwiek
+        // zapytanie do bazy.
         String type = jwtUtil.extractTokenType(refreshToken);
         if (!"refresh".equals(type)) {
             throw new JwtAuthenticationException("Nieprawidłowy typ tokenu", "INVALID_TOKEN_TYPE");
@@ -281,19 +291,18 @@ public class AuthService {
         String username = jwtUtil.extractUsername(refreshToken);
 
         /*
-         * 1a. Stan KONTA, sprawdzany przed rotacją.
+         * Stan konta sprawdzany przed obrotem sesji.
          *
-         * Bez tego blokada administracyjna byłaby nieskuteczna przez pełne 7 dni ważności
-         * tokenu odświeżającego: zablokowany nie mógłby się zalogować i nie otworzyłby
-         * żadnego endpointu żywym tokenem dostępowym (JwtFilter), ale co 15 minut wymieniałby
-         * sobie token na nowy i pracował dalej. AdminUserService.block kasuje wprawdzie
-         * tokeny z bazy, ale to druga, niezależna warstwa - ta sprawdza stan konta, tamta
-         * usuwa sesje, i żadna nie zastępuje drugiej.
+         * Bez tej kontroli blokada administracyjna byłaby nieskuteczna przez cały tydzień
+         * ważności tokenu odświeżającego: zablokowany użytkownik nie mógłby się zalogować ani
+         * użyć żywego tokenu dostępowego, ale co kwadrans wymieniałby token na nowy i pracował
+         * dalej. Usunięcie tokenów przy blokowaniu konta jest drugą, niezależną warstwą - tamta
+         * kasuje sesje, ta sprawdza stan konta i żadna nie zastępuje drugiej.
          *
-         * KOLEJNOŚĆ WOBEC rotate() JEST ISTOTNA. Po rotacji przedstawiony token jest już
-         * zużyty, więc ponowna próba dawałaby REFRESH_TOKEN_REUSED - komunikat mówiący
-         * "wykryto kradzież tokenu" zamiast "konto zablokowane", a log zapełniałby się
-         * fałszywymi ostrzeżeniami o włamaniu przy każdym odświeżeniu z zablokowanego konta.
+         * Kolejność wobec obrotu sesji jest istotna: po nim przedstawiony token jest już zużyty,
+         * więc kontrola wykonana później zwracałaby komunikat o wykryciu kradzieży tokenu zamiast
+         * o zablokowanym koncie, a log zapełniałby się fałszywymi ostrzeżeniami o włamaniu przy
+         * każdym odświeżeniu z zablokowanego konta.
          */
         userService.findEntityByEmail(username)
                 .filter(User::isBlocked)
@@ -305,15 +314,16 @@ public class AuthService {
         String accessToken = jwtUtil.generateToken(username);
         String newRefreshToken = jwtUtil.generateRefreshToken(username);
 
-        // 2. Stan po stronie serwera: czy ten token nie został już zużyty albo unieważniony.
-        //    Rotacja zużywa stary token i zapisuje nowy w tej samej rodzinie.
-        //    Rzuca wyjątek, jeśli token jest nieznany, zużyty (kradzież) lub wygasły -
-        //    wygenerowane wyżej tokeny są wtedy po prostu porzucane.
+        // Na koniec stan po stronie serwera: czy token nie został już zużyty albo unieważniony.
+        // Obrót zużywa stary token i zapisuje nowy w tej samej rodzinie, a przy tokenie nieznanym,
+        // zużytym (co oznacza kradzież) lub wygasłym rzuca wyjątek - wygenerowane wyżej tokeny
+        // zostają wtedy porzucone.
         refreshTokenService.rotate(refreshToken, newRefreshToken);
 
         return new TokenPair(accessToken, newRefreshToken);
     }
 
+    /** Kończy sesję, unieważniając rodzinę tokenów odświeżających. */
     @Transactional
     public void logout(String refreshToken) {
         if (refreshToken == null) {

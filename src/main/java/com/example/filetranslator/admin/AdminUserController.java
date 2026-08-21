@@ -26,18 +26,15 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * Panel administracyjny: przegląd kont i pięć akcji na nich.
  *
- * ŚCIEŻKA TO /users, A NIE /admin/users, i to nie jest kwestia gustu. SecurityConfig ma
- * regułę .requestMatchers("/users/**").hasRole("ADMIN") stojącą tam od czasu usunięcia
- * dawnego UserController właśnie po to, żeby przyszły kontroler był chroniony od pierwszego
- * commitu. Zmapowanie tych endpointów gdzie indziej wymagałoby nowego matchera, a do czasu
- * jego dodania panel wpadłby pod anyRequest().authenticated(), czyli stanąłby otworem dla
- * KAŻDEGO zalogowanego. Regresja: AdminPanelTest.regularUser_shouldGet403OnUserEndpoints.
+ * Endpointy stoją pod ścieżką /users, a nie /admin/users, ponieważ konfiguracja bezpieczeństwa
+ * ogranicza właśnie ten prefiks do roli administratora. Zmapowanie ich gdzie indziej wymagałoby
+ * nowej reguły, a do czasu jej dodania panel podlegałby regule ogólnej, czyli byłby dostępny dla
+ * każdego zalogowanego użytkownika. Adres w przeglądarce jest niezależny od adresu API.
  *
- * Akcje są POST-ami (i jednym DELETE), więc wymagają nagłówka CSRF jak każda operacja
- * zmieniająca stan.
+ * Wszystkie akcje zmieniają stan, więc wymagają nagłówka CSRF, tak jak reszta operacji tego API.
  *
- * Kontroler jest wyłącznie warstwą HTTP. Mapowanie wyjątków na kody stanu siedzi
- * w GlobalExceptionHandler.
+ * Kontroler jest wyłącznie warstwą HTTP - mapowanie wyjątków na kody stanu znajduje się
+ * w centralnym handlerze.
  */
 @RestController
 @RequestMapping("/users")
@@ -80,7 +77,7 @@ public class AdminUserController {
         return adminUserService.unblock(id, admin.getId());
     }
 
-    /** Zdejmuje blokadę po nieudanych logowaniach - NIE blokadę administracyjną. */
+    /** Zdejmuje blokadę po nieudanych logowaniach; nie rusza blokady administracyjnej. */
     @PostMapping("/{id}/unlock")
     public AdminUserView unlock(@PathVariable Long id,
                                 @AuthenticationPrincipal User admin) {

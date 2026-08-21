@@ -41,7 +41,7 @@ import static org.mockito.Mockito.when;
  * kasowały go bez śladu.
  *
  * JavaMailSender jest podmieniony na mocka - inaczej testy zależałyby od działającego
- * serwera SMTP, a chcemy tu sterować właśnie tym, czy wysyłka się udaje.
+ * serwera pocztowego, a test steruje właśnie tym, czy wysyłka się udaje.
  */
 @SpringBootTest
 @ActiveProfiles("test")

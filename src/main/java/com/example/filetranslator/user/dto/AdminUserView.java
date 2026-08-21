@@ -11,13 +11,12 @@ import java.time.Instant;
 /**
  * Konto widziane przez administratora w panelu.
  *
- * BUDOWANY WYŁĄCZNIE PROJEKCJĄ JPQL (UserRepository.findAdminViews / findAdminView),
- * nigdy z encji. To nie jest kwestia wydajności, tylko tego, czego w tym rekordzie NIE MA:
- * encja User niesie hash hasła i jest jednocześnie UserDetails, więc zwrócona z kontrolera
- * wypuściłaby hash do API. Skoro encja nigdy nie opuszcza repozytorium, nie ma jak wyciec.
- * Pilnuje tego AdminPanelTest.list_shouldNotExposePasswordHash.
+ * Budowany wyłącznie projekcją zapytania, nigdy z encji. Nie jest to kwestia wydajności, tylko
+ * tego, czego w tym rekordzie nie ma: encja konta niesie hash hasła i jest jednocześnie
+ * obiektem uwierzytelnienia, więc zwrócona z kontrolera wypuściłaby hash do API. Skoro encja
+ * nigdy nie opuszcza repozytorium, nie ma jak wyciec.
  *
- * JEDEN REKORD DLA LISTY, SZCZEGÓŁÓW I WSZYSTKICH CZTERECH AKCJI. Każda akcja oddaje
+ * Jeden rekord obsługuje listę, szczegóły i wszystkie akcje panelu. Każda akcja oddaje
  * konto po zmianie, więc front podmienia jeden wiersz zamiast przeładowywać stronę -
  * i nie ma drugiego kształtu odpowiedzi, który mógłby się rozjechać z pierwszym.
  *

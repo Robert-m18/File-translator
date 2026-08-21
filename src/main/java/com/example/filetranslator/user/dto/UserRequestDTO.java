@@ -23,11 +23,11 @@ public record UserRequestDTO(
 
         /*
          * Polityka hasła egzekwowana jest na danych wejściowych, nigdy na encji.
-         * Na encji User stała kiedyś jako @Size(min = 8) - a tam trafia już hash BCrypt
-         * (zawsze 60 znaków), więc realnie przechodziło dowolne hasło, także "a".
+         * Reguła długości umieszczona na encji sprawdzałaby długość skrótu hasła, czyli wartości
+         * o stałej długości, więc przepuszczałaby dowolne hasło.
          *
-         * Same reguły siedzą w @ValidPassword, bo hasło przychodzi też przy resecie
-         * (ResetPasswordRequest) i dwa skopiowane zestawy adnotacji by się rozjechały.
+         * Same reguły znajdują się we wspólnej adnotacji, ponieważ hasło przychodzi także
+         * przy resecie hasła, a dwa skopiowane zestawy adnotacji rozjechałyby się z czasem.
          */
         @ValidPassword
         String password

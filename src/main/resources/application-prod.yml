@@ -9,7 +9,7 @@ spring:
     hikari:
       # Hikari domyślnie otwiera 10 połączeń OD RAZU (minimum-idle domyślnie równa się
       # maximum-pool-size) i trzyma je otwarte. Baza po drugiej stronie ma swój limit
-      # równoległych połączeń i jest to limit CAŁEGO serwera, nie naszej aplikacji:
+      # równoległych połączeń i jest to limit całego serwera bazy, a nie tej aplikacji:
       # zarządzane bazy z darmowych planów bywają przy tym ustawione bardzo nisko.
       # Przekroczenie nie daje łagodnego objawu - aplikacja nie wstaje, a komunikat
       # ("too many clients") leży kilka poziomów Caused by pod czymś, co wygląda jak
@@ -47,7 +47,7 @@ app:
     url: "${FRONTEND_URL}"
   mail:
     # Bez wartości domyślnej - na produkcji adres nadawcy musi być tym, który
-    # dostawca poczty ma zweryfikowany dla naszej domeny. Domyślny adres z profilu
+    # dostawca poczty ma zweryfikowany dla używanej domeny. Domyślny adres z profilu
     # bazowego przeszedłby start aplikacji i wywalił się dopiero na pierwszym mailu.
     from: "${MAIL_FROM}"
   cookie:
@@ -85,11 +85,11 @@ management:
   endpoints:
     web:
       exposure:
-        # metrics dołożone razem z kontem administratora. Wcześniej wystawione były tylko
-        # health, info i prometheus, więc zalogowany administrator dostawał na /actuator/metrics
-        # 404 (reguła bezpieczeństwa istnieje, endpointu nie ma) - i wyglądało to jak zepsute
-        # konto, a nie jak brak endpointu. Powód ukrywania i tak był pozorny: /actuator/prometheus
-        # wystawia nadzbiór tych samych danych i stoi za tą samą regułą hasRole("ADMIN").
+        # Endpoint metryk jest wystawiony razem z pozostałymi: gdy brakuje go na liście,
+        # zalogowany administrator dostaje odpowiedź o nieznanym zasobie, mimo że reguła
+        # bezpieczeństwa istnieje - i wygląda to na zepsute konto, a nie na brak endpointu.
+        # Ukrywanie go i tak niewiele daje: endpoint dla systemu monitoringu wystawia nadzbiór
+        # tych samych danych i stoi za tą samą regułą autoryzacji.
         include: health,info,metrics,prometheus
   endpoint:
     health:

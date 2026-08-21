@@ -21,7 +21,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * Zasada projektu mówi: nigdy nie logujemy adresów email ani innych danych osobowych.
  * Handler naruszeń więzów jest miejscem, w którym najłatwiej ją złamać niechcący, bo to
- * baza - a nie nasz kod - wkłada wartość kolizji do komunikatu.
+ * to baza, a nie kod aplikacji, wkłada wartość kolizji do komunikatu.
  *
  * Test jest jednostkowy i podpina własny appender zamiast wołać cały kontekst: sprawdzamy
  * treść LOGU, a nie odpowiedź HTTP, więc podniesienie Springa nic by tu nie wniosło.

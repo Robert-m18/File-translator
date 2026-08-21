@@ -41,20 +41,18 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 /**
  * Panel administracyjny: przegląd kont i pięć akcji na nich.
  *
- * Testujemy przez PEŁNY łańcuch filtrów, nie na samym serwisie, bo połowa tej zmiany jest
- * właśnie w łańcuchu: reguła autoryzacji na /users/**, sprawdzenie blokady w JwtFilter
- * i checker wpięty w DaoAuthenticationProvider. Serwis wywołany wprost potwierdziłby
- * wyłącznie, że UPDATE ustawia kolumnę.
+ * Testy idą przez pełny łańcuch filtrów, a nie przez sam serwis, ponieważ połowa sprawdzanego
+ * zachowania znajduje się właśnie w łańcuchu: reguła autoryzacji ścieżki, sprawdzenie blokady
+ * w filtrze uwierzytelniającym i checker wpięty w mechanizm logowania. Serwis wywołany wprost
+ * potwierdzałby wyłącznie, że zapytanie ustawia kolumnę.
  *
- * UWAGA METODYCZNA - CZEGO NIE ZŁAPIE JwtFilterTest: mockuje on loadUserByUsername na
- * org.springframework.security.core.userdetails.User, więc "instanceof naszej encji" jest
- * tam fałszywy i gałąź blokady w filtrze przechodzi obok testu. Test 2 poniżej jest jedynym
- * miejscem, w którym ta linia jest w ogóle sprawdzana - ta sama sytuacja co CurrentUserTest
- * kontra JwtFilterTest przy dwóch uśpionych błędach z 2026-08-04.
+ * Test jednostkowy filtra nie pokrywa gałęzi blokady: podstawia on pod odczyt użytkownika
+ * atrapę innego typu niż encja aplikacji, więc sprawdzenie typu jest tam zawsze fałszywe.
+ * Test drugi w tej klasie jest jedynym miejscem, w którym ta gałąź jest w ogóle wykonywana.
  *
- * Klasa świadomie NIE bierze własnego kontekstu (@TestPropertySource): każdy nowy kontekst
- * to kolejna pula Hikari trzymana do końca JVM-a, a suite wywróciła się już raz na
- * wyczerpanym max_connections PostgreSQL-a. Nic tutaj nie wymaga innej konfiguracji.
+ * Klasa świadomie nie bierze własnego kontekstu Springa: każdy nowy kontekst to kolejna pula
+ * połączeń trzymana do końca przebiegu, a limit połączeń bazy jest wspólny dla wszystkich
+ * kontekstów. Nic tutaj nie wymaga innej konfiguracji.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -82,9 +80,9 @@ class AdminPanelTest {
     private TranslationJobRepository translationJobRepository;
 
     /**
-     * Magazyn obiektów - w domyślnym przebiegu MinIO z kontenera, przy -Ph2 mapa w pamięci.
-     * Test 18 sprawdza przez ten sam port, którym pisze aplikacja, więc obie implementacje
-     * odpowiadają na to samo pytanie.
+     * Magazyn obiektów - w domyślnym przebiegu prawdziwy magazyn z kontenera, w wariancie bez
+     * Dockera mapa w pamięci. Test kasowania konta sprawdza go przez ten sam port, którym pisze
+     * aplikacja, więc obie implementacje odpowiadają na to samo pytanie.
      */
     @Autowired
     private ObjectStore objectStore;
@@ -94,13 +92,12 @@ class AdminPanelTest {
     private Long userId;
 
     /**
-     * Kasujemy WSZYSTKIE konta z rolą ADMIN, nie tylko własne.
+     * Kasowane są wszystkie konta z rolą administratora, nie tylko założone przez tę klasę.
      *
-     * Powód jest konkretny: reguła "ostatniego administratora" liczy niezablokowanych
-     * administratorów w całej bazie, a H2 żyje dłużej niż pojedynczy kontekst (DB_CLOSE_DELAY=-1),
-     * więc konto zostawione przez AdminAccessTest zmieniałoby wynik testu 10 w zależności od
-     * kolejności klas. Klucze obce mają ON DELETE CASCADE, więc sesje i zlecenia znikają razem
-     * z kontem.
+     * Reguła ostatniego administratora liczy niezablokowanych administratorów w całej bazie,
+     * a baza testowa żyje dłużej niż pojedynczy kontekst, więc konto zostawione przez inną klasę
+     * zmieniałoby wynik zależnie od kolejności klas. Klucze obce kasują kaskadowo, więc sesje
+     * i zlecenia znikają razem z kontem.
      */
     @BeforeEach
     void setUp() {
@@ -183,10 +180,10 @@ class AdminPanelTest {
     // ---------- 1-8: egzekwowanie blokady ----------
 
     /**
-     * Asercja obejmuje KOD, nie sam status. Wersja przepięta na kolumnę enabled dałaby
-     * 403 ACCOUNT_NOT_CONFIRMED, a wersja polegająca wyłącznie na isAccountNonLocked()
-     * dałaby 423 ACCOUNT_LOCKED - czyli komunikat "spróbuj później" przy blokadzie, która
-     * sama nie mija. Sprawdzenie samego statusu przepuściłoby ten drugi wariant.
+     * Asercja obejmuje kod odpowiedzi, a nie sam status. Wariant oparty na kolumnie aktywności
+     * konta dałby komunikat o niepotwierdzonym adresie, a wariant oparty na ogólnym stanie
+     * konta - komunikat sugerujący, że blokada minie sama. Sprawdzenie samego statusu
+     * przepuściłoby ten drugi wariant.
      */
     @Test
     @DisplayName("1. Zablokowany nie zaloguje się - 423 ACCOUNT_BLOCKED")
@@ -206,9 +203,9 @@ class AdminPanelTest {
     }
 
     /**
-     * Sedno całej zmiany: blokada ma działać NATYCHMIAST. Bez sprawdzenia w JwtFilter
-     * ciasteczko wydane przed blokadą otwierałoby chronione endpointy jeszcze przez
-     * 15 minut ważności tokenu dostępowego.
+     * Blokada ma działać natychmiast. Bez sprawdzenia w filtrze uwierzytelniającym ciasteczko
+     * wydane przed blokadą otwierałoby chronione endpointy jeszcze przez cały czas ważności
+     * tokenu dostępowego.
      */
     @Test
     @DisplayName("2. Blokada unieważnia żywy token dostępowy przy następnym żądaniu")
@@ -226,12 +223,12 @@ class AdminPanelTest {
     }
 
     /**
-     * Dziura, przez którą blokada byłaby nieskuteczna przez 7 dni: zablokowany co 15 minut
-     * wymieniałby token na nowy i pracował dalej.
+     * Luka, przez którą blokada byłaby nieskuteczna przez cały tydzień: zablokowany użytkownik
+     * co kwadrans wymieniałby token na nowy i pracował dalej.
      *
-     * Bez kontroli stanu w AuthService.refreshToken test NIE jest po prostu czerwony -
-     * wraca 401 REFRESH_TOKEN_REUSED (bo blokada przez panel unieważniła tokeny), czyli
-     * komunikat mówiący użytkownikowi o kradzieży tokenu. Dlatego asercja idzie po kodzie.
+     * Bez kontroli stanu konta przy odnawianiu sesji test nie jest po prostu czerwony: odpowiedź
+     * niesie wtedy kod ponownego użycia tokenu, bo blokada unieważniła tokeny, czyli komunikat
+     * mówiący użytkownikowi o kradzieży. Dlatego asercja sprawdza kod, a nie sam status.
      */
     @Test
     @DisplayName("3. Zablokowany nie odświeży sesji - 423 ACCOUNT_BLOCKED, nie REFRESH_TOKEN_REUSED")
@@ -248,10 +245,10 @@ class AdminPanelTest {
     }
 
     /**
-     * Ten sam wynik, ale przy ŻYWEJ sesji: blokada wpisana wprost do wiersza, tokeny
-     * nietknięte. Izoluje kontrolę stanu konta od rewokacji sesji - bez niej test 3
-     * przechodziłby na samym unieważnieniu tokenów, a kontrola stanu mogłaby nie istnieć.
-     * Odwzorowuje też wyścig: sesja założona po nałożeniu blokady, a przed rewokacją.
+     * Ten sam wynik przy żywej sesji: blokada wpisana wprost do wiersza, tokeny nietknięte.
+     * Test izoluje kontrolę stanu konta od unieważnienia sesji - bez niego poprzedni przypadek
+     * przechodziłby na samym unieważnieniu tokenów, a kontroli stanu mogłoby nie być.
+     * Odwzorowuje też wyścig: sesję założoną po nałożeniu blokady, a przed unieważnieniem sesji.
      */
     @Test
     @DisplayName("4. Zablokowany wiersz z żywym tokenem też nie odświeży sesji")
@@ -268,10 +265,10 @@ class AdminPanelTest {
     }
 
     /**
-     * Blokada ma zrywać sesje, a nie tylko zamykać drzwi na przyszłość. Testy 3 i 4
-     * przeszłyby na samej kontroli stanu, więc bez tego wypadnięcie revokeAllSessions
-     * z AdminUserService przeszłoby niezauważone - do momentu, w którym ktoś zdejmie
-     * blokadę i odkryje, że stara sesja ożyła.
+     * Blokada ma unieważniać sesje, a nie tylko zamykać dostęp na przyszłość. Poprzednie testy
+     * przechodzą na samej kontroli stanu, więc bez tego przypadku usunięcie unieważniania sesji
+     * z panelu przeszłoby niezauważone - do chwili, w której ktoś zdejmie blokadę i odkryje,
+     * że stara sesja nadal działa.
      */
     @Test
     @DisplayName("5. Blokada unieważnia wszystkie tokeny odświeżające")
@@ -287,10 +284,10 @@ class AdminPanelTest {
     }
 
     /**
-     * PADA W CHWILI, GDY KTOŚ "UPROŚCI" I WRÓCI DO locked_until. Zdjęcie blokady po
-     * nieudanych logowaniach zeruje failed_login_attempts i locked_until - gdyby kara
-     * administracyjna siedziała w tej samej kolumnie, ta akcja by ją zdejmowała. Tak samo
-     * zdejmowałby ją każdy udany login i każdy reset hasła, czyli działanie SAMEGO UKARANEGO.
+     * Test czerwienieje, gdy blokada administracyjna zostanie przeniesiona do kolumny blokady
+     * po nieudanych logowaniach. Zdjęcie tamtej blokady zeruje licznik prób i termin, więc kara
+     * administracyjna trzymana w tym samym miejscu byłaby przy okazji zdejmowana - tak samo jak
+     * przy każdym udanym logowaniu i każdym resecie hasła, czyli w wyniku działania ukaranego.
      */
     @Test
     @DisplayName("6. Zdjęcie blokady po nieudanych logowaniach nie zdejmuje blokady administracyjnej")
@@ -317,12 +314,12 @@ class AdminPanelTest {
     }
 
     /**
-     * KONTROLA NEGATYWNA - najważniejszy test w tej klasie.
+     * Kontrola negatywna, najważniejsza w tej klasie.
      *
-     * Pada dokładnie wtedy, gdy JwtFilter zacznie sprawdzać isAccountNonLocked() zamiast
-     * isBlocked(). Blokadę po nieudanych logowaniach wywołuje KAŻDY, kto zna czyjś adres
-     * i wpisze trzy razy złe hasło - gdyby zrywała żywe sesje, byłoby to gotowe narzędzie
-     * do wybijania dowolnego zalogowanego użytkownika z aplikacji na 15 minut.
+     * Test czerwienieje dokładnie wtedy, gdy filtr uwierzytelniający zacznie sprawdzać ogólny
+     * stan konta zamiast samej blokady administracyjnej. Blokadę po nieudanych logowaniach może
+     * wywołać każdy, kto zna cudzy adres i poda kilka razy złe hasło - gdyby unieważniała żywe
+     * sesje, byłaby gotowym narzędziem do wyrzucania dowolnego zalogowanego użytkownika.
      */
     @Test
     @DisplayName("7. Blokada po nieudanych logowaniach NIE zrywa żywej sesji")
@@ -370,15 +367,14 @@ class AdminPanelTest {
     }
 
     /**
-     * WYMAGA DRUGIEGO KONTA ADMIN - i to nie jako dekoracji: dopiero zablokowanie go
-     * sprawia, że kolejna próba dotyczy OSTATNIEGO niezablokowanego administratora.
-     * Przy jednym koncie test przeszedłby na regule "nie blokuj siebie" i nie
-     * dyskryminowałby niczego.
+     * Przypadek wymaga drugiego konta administratora: dopiero jego zablokowanie sprawia, że
+     * kolejna próba dotyczy ostatniego niezablokowanego administratora. Przy jednym koncie test
+     * przeszedłby na regule zakazującej działania na własnym koncie i niczego by nie rozróżniał.
      *
-     * Kolejność kontroli w AdminUserService jest tym, co ten test przypina: reguła
-     * ostatniego administratora stoi PRZED regułą blokady siebie, bo nazywa prawdziwy
-     * skutek (nie ma drogi powrotnej do roli ADMIN - AdminBootstrap nie promuje istniejących
-     * kont USER, więc wyjściem byłby ręczny UPDATE w bazie).
+     * Test przypina też kolejność kontroli: reguła ostatniego administratora stoi przed regułą
+     * zakazującą działania na własnym koncie, ponieważ nazywa prawdziwy skutek - do roli
+     * administratora nie ma automatycznej drogi powrotnej, więc wyjściem byłaby ręczna zmiana
+     * w bazie.
      */
     @Test
     @DisplayName("10. Ostatniego niezablokowanego administratora nie da się zablokować")
@@ -395,15 +391,14 @@ class AdminPanelTest {
     }
 
     /**
-     * Regresja na ŚCIEŻKĘ kontrolera. Reguła .requestMatchers("/users/**").hasRole("ADMIN")
-     * istnieje w SecurityConfig od usunięcia dawnego UserController - zmapowanie panelu
-     * gdziekolwiek indziej (np. /admin/users) wpuściłoby pod anyRequest().authenticated()
-     * każdego zalogowanego użytkownika.
+     * Test pilnuje ścieżki, pod którą stoi kontroler. Reguła ograniczająca ten prefiks do roli
+     * administratora obowiązuje niezależnie od kontrolera, więc zmapowanie panelu gdzie indziej
+     * wpuściłoby pod regułę ogólną każdego zalogowanego użytkownika.
      *
-     * PIERWSZA ASERCJA JEST TU KONIECZNA i nie jest powtórzeniem innych testów: samo "zwykły
-     * dostaje 403 na /users" byłoby zielone także wtedy, gdyby pod /users nie było ŻADNEGO
-     * kontrolera - nieznana ścieżka pod tą regułą też kończy się odmową. Dopiero 200 dla
-     * administratora dowodzi, że panel faktycznie stoi tam, gdzie sięga reguła.
+     * Pierwsza asercja jest konieczna i nie powtarza innych testów: sprawdzenie, że zwykły
+     * użytkownik dostaje odmowę, byłoby zielone także wtedy, gdyby pod tą ścieżką nie było
+     * żadnego kontrolera, bo nieznana ścieżka pod tą regułą też kończy się odmową. Dopiero
+     * powodzenie dla administratora dowodzi, że panel stoi tam, gdzie sięga reguła.
      */
     @Test
     @DisplayName("11. Panel stoi pod regułą ADMIN, a zwykły użytkownik dostaje 403")
@@ -423,9 +418,9 @@ class AdminPanelTest {
         block(user, adminId, "próba przejęcia")
                 .andExpect(status().isForbidden());
 
-        // DELETE dołożony do panelu później niż reszta - reguła obejmuje ścieżkę, nie metodę,
-        // ale asercja jest tania, a pomyłka w tym miejscu oddaje kasowanie kont każdemu
-        // zalogowanemu.
+        // Reguła obejmuje ścieżkę, a nie metodę, ale asercja jest tania, a pomyłka w tym
+        // miejscu oddałaby kasowanie kont każdemu zalogowanemu użytkownikowi.
+
         mockMvc.perform(delete("/users/{id}", adminId).with(csrf()).cookie(user))
                 .andExpect(status().isForbidden());
 
@@ -435,10 +430,10 @@ class AdminPanelTest {
     // ---------- 12-15: lista i wyszukiwanie ----------
 
     /**
-     * Wiersz z wielkimi literami w adresie zapisujemy wprost przez repozytorium, bo
-     * EmailNormalizer działa w konstruktorach DTO - takie konta pochodzą sprzed jego
-     * wprowadzenia. Bez lower() po stronie kolumny PostgreSQL (i H2 w MODE=PostgreSQL)
-     * ich nie znajdzie, a administrator zobaczy pustą listę zamiast konta, o które pytał.
+     * Wiersz z wielkimi literami w adresie zapisywany jest wprost przez repozytorium, ponieważ
+     * normalizacja działa w konstruktorach DTO, a takie konta pochodzą sprzed jej wprowadzenia.
+     * Bez funkcji zmiany wielkości liter po stronie kolumny baza ich nie znajdzie, a administrator
+     * zobaczy pustą listę zamiast konta, o które pytał.
      */
     @Test
     @DisplayName("12. Wyszukiwanie ignoruje wielkość liter po obu stronach")
@@ -483,15 +478,15 @@ class AdminPanelTest {
     }
 
     /**
-     * Asercja po SUROWEJ treści odpowiedzi, nie po polach DTO: gdyby ktoś zwrócił stąd
-     * encję User zamiast projekcji, test na polach dalej byłby zielony, a hash hasła
-     * pojechałby do przeglądarki. Ta sama metoda co w CurrentUserTest.
+     * Asercja idzie po surowej treści odpowiedzi, a nie po polach obiektu: przy zwróceniu
+     * encji zamiast projekcji test sprawdzający pola nadal byłby zielony, a hash hasła
+     * pojechałby do przeglądarki.
      */
     @Test
     @DisplayName("14. Lista nie wynosi hasha hasła ani wewnętrznych pól UserDetails")
     void list_shouldNotExposePasswordHash() throws Exception {
-        // Z filtrem, a nie cała lista: kolejność jest po id rosnąco, a konta tej klasy
-        // powstają jako ostatnie, więc na pierwszej stronie mogłoby ich nie być.
+        // Z filtrem, a nie cała lista: kolejność jest po identyfikatorze rosnąco, a konta tej
+        // klasy powstają jako ostatnie, więc na pierwszej stronie mogłoby ich nie być.
         String body = mockMvc.perform(get("/users").param("q", "panel-user").cookie(accessCookie(ADMIN_EMAIL)))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
@@ -539,7 +534,7 @@ class AdminPanelTest {
     }
 
     /**
-     * Powtórna blokada nie nadpisuje ŚLADU AUDYTOWEGO. Bez warunku "and blockedAt is null"
+     * Powtórna blokada nie nadpisuje śladu audytowego. Bez warunku wykluczającego konta już
      * przypadkowy dwuklik podmieniłby datę i powód na nowe, a informacja o tym, kiedy i za co
      * konto faktycznie padło, przepadłaby bez śladu.
      */
@@ -597,18 +592,18 @@ class AdminPanelTest {
     // ---------- 18-21: usuwanie konta ----------
 
     /**
-     * 18. Sedno kasowania: znika KONTO I WSZYSTKO, CO ZA NIM STOI.
+     * Kasowanie konta usuwa je razem ze wszystkim, co od niego zależy.
      *
      * Cztery asercje zamiast jednej, bo każda pilnuje innego mechanizmu i każda mogłaby
-     * zawieść osobno: wiersz users (zapytanie JPQL), refresh_tokens i translation_jobs
-     * (kaskada po stronie bazy - Hibernate jej NIE zna, więc gdyby changeset zakładał klucz
-     * obcy bez ON DELETE CASCADE, kasowanie konta wywaliłoby się na naruszeniu więzów albo
-     * zostawiło osierocone wiersze) oraz plik w magazynie obiektowym, który z bazą nie ma
-     * wspólnej transakcji i wymaga osobnego wywołania.
+     * zawieść osobno: wiersz konta usuwa zapytanie aplikacji, sesje i zlecenia znikają kaskadą
+     * po stronie bazy, o której warstwa dostępu do danych nic nie wie, więc klucz obcy bez
+     * kaskadowego kasowania przerwałby operację naruszeniem więzów albo zostawił osierocone
+     * wiersze, a plik w magazynie obiektowym nie ma z tą transakcją nic wspólnego i wymaga
+     * osobnego wywołania.
      *
-     * Plik jest tu najważniejszy: to jedyna część, której NIE załatwia żadna kaskada,
-     * a jednocześnie ta, dla której kasowanie konta w ogóle powstało. Bez wołania
-     * deleteAllFilesOf test jest czerwony wyłącznie na ostatniej linii - reszta przechodzi.
+     * Plik jest tu najważniejszy: to jedyna część, której nie załatwia żadna kaskada, a zarazem
+     * ta, dla której kasowanie konta powstało. Bez wywołania kasującego pliki test czerwienieje
+     * wyłącznie na ostatniej asercji, bo reszta przechodzi.
      */
     @Test
     @DisplayName("18. Usunięcie konta kasuje sesje, zlecenia i pliki użytkownika")
@@ -632,13 +627,13 @@ class AdminPanelTest {
     }
 
     /**
-     * 19. Skasowane konto przestaje działać NATYCHMIAST, także z żywym ciasteczkiem.
+     * Skasowane konto przestaje działać natychmiast, także z żywym ciasteczkiem.
      *
-     * Asercja idzie po KODZIE, nie po samym statusie, i to jest tu cała treść testu.
-     * Bez osobnej gałęzi na UsernameNotFoundException w JwtFilter odpowiedź też ma 401 -
-     * tyle że z kodem TOKEN_PROCESSING_ERROR, na którym front się nie rozgałęzia, więc
-     * użytkownik zostaje na ekranie z komunikatem o wewnętrznej awarii zamiast wrócić na
-     * logowanie. Sam status przepuściłby ten wariant bez mrugnięcia.
+     * Asercja idzie po kodzie odpowiedzi, a nie po samym statusie, i na tym polega ten test.
+     * Bez osobnej gałęzi dla nieodnalezionego konta filtr uwierzytelniający również odmawia,
+     * ale kodem oznaczającym błąd przetwarzania tokenu, na którym front się nie rozgałęzia, więc
+     * użytkownik zostaje na ekranie z komunikatem o wewnętrznej awarii zamiast wrócić na ekran
+     * logowania. Sprawdzenie samego statusu przepuściłoby ten wariant.
      */
     @Test
     @DisplayName("19. Skasowane konto nie zaloguje się i traci żywą sesję")
@@ -667,14 +662,14 @@ class AdminPanelTest {
     }
 
     /**
-     * 20. Administrator nie skasuje samego siebie - i to niezależnie od tego, ilu jest
-     * administratorów.
+     * Administrator nie skasuje własnego konta, niezależnie od tego, ilu jest administratorów.
+
      *
-     * Różnica wobec blokady jest tu celowa i test ją utrwala: w setUp istnieje DRUGI
-     * administrator, więc gdyby kontrolą był "ostatni administrator" (jak przy blokadzie),
-     * operacja by przeszła i test byłby czerwony. Kod odpowiedzi jest częścią asercji,
-     * bo LAST_ADMIN_CANNOT_BE_DELETED znaczyłoby coś innego: "przy drugim administratorze
-     * by się udało", czyli nieprawdę.
+     * Różnica wobec blokady jest celowa i test ją utrwala: w przygotowaniu istnieje drugi
+     * administrator, więc gdyby obowiązywała tu reguła ostatniego administratora, operacja by
+     * przeszła i test byłby czerwony. Kod odpowiedzi jest częścią asercji, ponieważ kod mówiący
+     * o ostatnim administratorze znaczyłby co innego - sugerowałby, że przy drugim koncie
+     * operacja by się powiodła, co jest nieprawdą.
      */
     @Test
     @DisplayName("20. Administrator nie usunie własnego konta")
@@ -689,15 +684,14 @@ class AdminPanelTest {
     }
 
     /**
-     * 21. Ostatniego niezablokowanego administratora nie da się usunąć.
+     * Zablokowany administrator nie jest chroniony regułą ostatniego administratora.
      *
-     * Sekwencyjnie ta kontrola jest nieosiągalna (wołający sam jest niezablokowanym
-     * administratorem, więc przy CUDZYM celu niezablokowani są co najmniej dwaj), dlatego
-     * test ustawia stan wprost: drugi administrator zostaje zablokowany, a pierwszy próbuje
-     * skasować... jego. Sprawdzamy więc przypadek odwrotny - że zablokowany administrator
-     * NIE jest chroniony - bo to on dowodzi, że warunek liczy niezablokowanych, a nie
-     * wszystkich z rolą ADMIN. Wariant współbieżny (dwóch kasujących się nawzajem) zamyka
-     * blokada wierszy w lockUnblockedAdminIds i testem MockMvc go nie odwzoruję.
+     * Sekwencyjnie sama reguła jest nieosiągalna, bo wołający jest niezablokowanym
+     * administratorem, więc przy cudzym celu niezablokowani są co najmniej dwaj. Test ustawia
+     * więc stan wprost: drugi administrator zostaje zablokowany, a pierwszy go kasuje. Sprawdzany
+     * jest przypadek odwrotny, bo to on dowodzi, że warunek liczy niezablokowanych, a nie
+     * wszystkich z rolą administratora. Wariantu współbieżnego, w którym dwóch administratorów
+     * kasuje się nawzajem, ten rodzaj testu nie odwzoruje - zamyka go blokada wierszy w bazie.
      */
     @Test
     @DisplayName("21. Zablokowanego administratora wolno usunąć - liczą się niezablokowani")
@@ -730,10 +724,10 @@ class AdminPanelTest {
      * Zlecenie tłumaczenia razem z plikiem w magazynie - w tej kolejności, w której robi to
      * aplikacja (najpierw obiekt, potem wiersz).
      *
-     * Wiersz zakładamy przez repozytorium, a nie przez POST /translations: przejście przez
-     * API wciągnęłoby do tego testu limity znaków, walidację formatu i pracownika kolejki,
-     * czyli trzy rzeczy, które z kasowaniem konta nie mają nic wspólnego i które potrafią
-     * uczynić go czerwonym z zupełnie innego powodu.
+     * Wiersz zakładany jest przez repozytorium, a nie przez API: przejście przez API wciągnęłoby
+     * do tego testu limity znaków, walidację formatu i wykonawcę kolejki, czyli trzy rzeczy,
+     * które z kasowaniem konta nie mają nic wspólnego, a potrafią uczynić go czerwonym
+     * z zupełnie innego powodu.
      */
     private String seedJobWithFile(Long ownerId) {
         String key = ObjectKeys.sourceKey(

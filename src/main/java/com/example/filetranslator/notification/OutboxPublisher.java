@@ -29,53 +29,33 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Wysyła maile zamówione w skrzynce nadawczej.
+ * Wysyła maile zamówione w skrzynce nadawczej (tabela outbox_messages).
  *
- * Pętla jednego cyklu:
- *   1. rezerwacja paczki: odczyt kandydatów (status NEW, nextRetryAt <= teraz) blokujący
- *      wiersze dla tej instancji, i od razu UPDATE odsuwający nextRetryAt - wszystko
- *      w jednej krótkiej transakcji,
- *   2. wysyłka zarezerwowanych maili RÓWNOLEGLE (synchronicznie w obrębie wątku, żeby
- *      znać wynik każdego z osobna),
- *   3. zapis wyniku każdej wiadomości: SENT, albo ponowienie z backoffem, albo FAILED
- *      po wyczerpaniu prób.
+ * Cykl składa się z trzech kroków: rezerwacji paczki wiadomości w jednej krótkiej transakcji,
+ * równoległej wysyłki zarezerwowanych wiadomości i zapisu wyniku każdej z nich osobno - wysłana,
+ * ponowienie z backoffem albo porzucenie po wyczerpaniu prób.
  *
- * DLACZEGO WYSYŁKA JEST RÓWNOLEGŁA
+ * Wysyłka jest równoległa, ponieważ rozmowa z serwerem pocztowym trwa rzędy wielkości dłużej niż
+ * cokolwiek innego w tym cyklu. Przy wysyłce po kolei maile z jednej paczki czekają jeden na
+ * drugiego, więc ostatni adresat dostaje link tym później, im więcej osób rejestrowało się przed
+ * nim; kolejność wysyłki nie niesie tu żadnego znaczenia, bo są to niezależne wiadomości do
+ * niezależnych osób. Równoległość jest ograniczona konfiguracją, bo serwery pocztowe limitują
+ * liczbę jednoczesnych połączeń jednego nadawcy - pula bez ograniczenia zamieniłaby szczyt ruchu
+ * w odrzucanie maili.
  *
- * Rozmowa z SMTP trwa rzędy wielkości dłużej niż cokolwiek innego w tym cyklu. Wysyłane
- * po kolei, maile z jednej paczki czekały jeden na drugiego, więc ostatni adresat w paczce
- * dostawał link tym później, im więcej osób rejestrowało się przed nim. Kolejność wysyłki
- * nie niesie tu żadnego znaczenia - to niezależne wiadomości do niezależnych osób.
+ * Każdy krok ma własną transakcję. Rezerwacja musi zostać zatwierdzona przed wysyłką, inaczej
+ * druga instancja jej nie zobaczy i wyśle ten sam mail równolegle. Zapis wyniku następuje po
+ * operacji zewnętrznej, więc również musi być osobny. Jedna transakcja na cały cykl oznaczałaby
+ * trzymanie połączenia z bazą przez czas rozmowy z serwerem pocztowym, a przy wysyłce równoległej
+ * tylu połączeń naraz, ile wiadomości jest w locie.
  *
- * Równoległość jest OGRANICZONA (app.outbox.concurrency), bo serwery SMTP limitują liczbę
- * jednoczesnych połączeń z jednego nadawcy. Nieograniczona pula zamieniłaby szczyt ruchu
- * w odrzucanie maili, czyli w gorszy problem niż ten, który rozwiązujemy.
+ * Transakcje prowadzone są programowo, a nie adnotacją: wywołanie własnej metody omija proxy
+ * Springa, a przy wysyłce równoległej adnotacja i tak nie przeniosłaby się na wątek roboczy.
  *
- * publishBatch() czeka na całą paczkę i dopiero wtedy wraca. Dzięki temu pozostaje
- * wywoływalna wprost z testów: po jej powrocie wszystkie statusy są już zapisane i nie ma
- * czego "chwilę odczekać".
- *
- * DLACZEGO KAŻDY KROK MA WŁASNĄ TRANSAKCJĘ
- *
- * Rezerwacja musi zostać ZATWIERDZONA przed wysyłką, inaczej druga instancja jej nie widzi
- * i wysyła ten sam mail równolegle. Zapis wyniku musi być osobno, bo dzieje się już po
- * operacji zewnętrznej. Jedna transakcja na cały cykl oznaczałaby trzymanie połączenia
- * z bazą przez czas rozmowy z serwerem SMTP - a to najgorsze miejsce, żeby blokować
- * połączenie z puli. Przy wysyłce równoległej ma to dodatkową wagę: tyle równoczesnych
- * wysyłek trzymałoby tyle połączeń naraz.
- *
- * TransactionTemplate, a nie @Transactional na metodach tej klasy: wywołanie własnej metody
- * omija proxy Springa, więc adnotacja nie zadziałałaby wcale. Ta sama pułapka i to samo
- * rozwiązanie co w RefreshTokenService. Przy wysyłce równoległej to zresztą jedyna opcja -
- * @Transactional nie przechodzi na wątek roboczy, a TransactionTemplate wykonuje się już
- * na tym wątku, który go woła.
- *
- * GWARANCJA DOSTAWY
- *
- * At-least-once. Jeśli proces padnie między udaną wysyłką a zapisem statusu, wiersz wróci
- * po upływie rezerwacji i mail poleci drugi raz. Nie da się tego wyeliminować bez
- * transakcji rozproszonej obejmującej SMTP, czyli w praktyce nie da się. Przy tych mailach
- * duplikat jest nieszkodliwy: link jest ten sam, a jednorazowość tokenu i tak pilnuje baza.
+ * Gwarancja dostawy to at-least-once. Awaria między udaną wysyłką a zapisem statusu powoduje
+ * powtórzenie wiadomości po upływie rezerwacji. Wyeliminowanie tego wymagałoby transakcji
+ * rozproszonej obejmującej serwer pocztowy, a przy tych wiadomościach duplikat jest nieszkodliwy:
+ * link jest ten sam, a jednorazowości tokenu pilnuje baza.
  */
 @Slf4j
 @Component
@@ -103,9 +83,9 @@ public class OutboxPublisher {
         this.shortTransaction = new TransactionTemplate(transactionManager);
         this.shortTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
 
-        // Pula stała, nie wątki wirtualne: chodzi właśnie o SUFIT liczby równoczesnych
-        // połączeń SMTP, a wątki wirtualne żadnego sufitu nie dają. Nazwane, żeby w logach
-        // było widać, że to wysyłka, a nie wątek harmonogramu.
+        // Pula stała, a nie wątki wirtualne: celem jest sufit liczby równoczesnych połączeń
+        // z serwerem pocztowym, którego wątki wirtualne nie dają. Nazwane wątki pozwalają odróżnić
+        // w logach wysyłkę od zadań harmonogramu.
         AtomicInteger counter = new AtomicInteger();
         ThreadFactory factory = runnable -> {
             Thread thread = new Thread(runnable, "outbox-sender-" + counter.incrementAndGet());
@@ -124,10 +104,9 @@ public class OutboxPublisher {
     }
 
     /**
-     * Jeden cykl wysyłki. Publiczna i niezależna od harmonogramu, żeby testy mogły ją
-     * wywołać wprost, bez czekania i bez zgadywania, co zdążyło się wykonać w tle.
-     *
-     * Wraca dopiero, gdy każda wiadomość z paczki ma zapisany wynik.
+     * Wykonuje jeden cykl wysyłki i wraca dopiero wtedy, gdy każda wiadomość z paczki ma zapisany
+     * wynik. Metoda jest publiczna i niezależna od harmonogramu, dzięki czemu testy wywołują ją
+     * wprost, bez czekania i bez zgadywania, co zdążyło wykonać się w tle.
      *
      * @return liczba wiadomości wysłanych w tym cyklu
      */
@@ -137,9 +116,8 @@ public class OutboxPublisher {
         if (claimed.isEmpty()) {
             return 0;
         }
-        // Jedna wiadomość nie ma z czym się zrównoleglać - przeskok na inny wątek
-        // byłby tu czystym kosztem. To zresztą najczęstszy przypadek przy ruchu,
-        // jaki ta aplikacja widzi.
+        // Pojedyncza wiadomość nie ma z czym się zrównoleglać, a przeskok na inny wątek kosztuje.
+        // Przy typowym ruchu jest to najczęstszy przypadek.
         if (claimed.size() == 1) {
             return send(claimed.get(0)) ? 1 : 0;
         }
@@ -148,15 +126,16 @@ public class OutboxPublisher {
                 .map(message -> CompletableFuture.supplyAsync(() -> send(message), senders))
                 .toList();
 
-        // join() na każdym z osobna, bez allOf(): i tak czekamy na wszystkie, a tak nie
-        // trzeba tablicować futures tylko po to, żeby zaraz je odpytać.
+        // Oczekiwanie na każdy wynik z osobna zamiast na wspólny future: i tak potrzebne są
+        // wszystkie wyniki, a tak nie trzeba budować tablicy tylko po to, żeby ją zaraz odpytać.
         return (int) results.stream().filter(CompletableFuture::join).count();
     }
 
     /**
-     * Odczytuje i rezerwuje paczkę w jednej transakcji. Blokada z findReadyToSend
-     * (FOR UPDATE SKIP LOCKED) trzyma się do commitu, więc żadna inna instancja nie
-     * odczyta w tym czasie tych samych wierszy.
+     * Odczytuje i rezerwuje paczkę wiadomości w jednej transakcji.
+     *
+     * Blokada założona przez odczyt kandydatów trwa do commitu, więc dwie instancje aplikacji
+     * pobierają rozłączne paczki zamiast konkurować o te same wiersze.
      *
      * @return wiadomości zarezerwowane dla tej instancji, w stanie sprzed rezerwacji
      */
@@ -183,12 +162,13 @@ public class OutboxPublisher {
     }
 
     /**
-     * Wysyła jedną zarezerwowaną wiadomość i zapisuje wynik. Nigdy nie rzuca - leci
-     * na wątku roboczym, gdzie wyjątek nie ma dokąd polecieć, a jedna zepsuta wiadomość
-     * nie może przerwać wysyłki pozostałych.
+     * Wysyła jedną zarezerwowaną wiadomość i zapisuje wynik.
+     *
+     * Metoda nie wypuszcza wyjątków: wykonuje się na wątku roboczym, gdzie wyjątek nie miałby
+     * dokąd polecieć, a jedna zepsuta wiadomość nie może przerwać wysyłki pozostałych.
      */
     private boolean send(OutboxMessage message) {
-        int attempt = message.getAttempts() + 1; // claim już podbił licznik w bazie
+        int attempt = message.getAttempts() + 1; // rezerwacja podbiła już licznik w bazie
 
         try {
             deliver(message);
@@ -203,11 +183,12 @@ public class OutboxPublisher {
         }
     }
 
+    /** Odtwarza parametry wiadomości z zapisanego ładunku i wywołuje właściwy szablon. */
     private void deliver(OutboxMessage message) {
         Map<String, String> vars = objectMapper.readValue(message.getPayload(), PAYLOAD_TYPE);
 
-        // switch bez gałęzi default: dołożenie wartości do MailTemplate przestanie się
-        // kompilować, dopóki nie dopiszemy tu obsługi. O to właśnie chodziło w enumie.
+        // Instrukcja bez gałęzi domyślnej: dołożenie nowej wartości do typu wyliczeniowego
+        // przestanie się kompilować, dopóki nie powstanie tutaj jej obsługa.
         switch (message.getTemplate()) {
             case VERIFICATION -> emailService.sendVerificationEmail(
                     message.getRecipient(), vars.get("name"), vars.get("token"));
@@ -219,25 +200,27 @@ public class OutboxPublisher {
         }
     }
 
+    /** Zapisuje nieudaną próbę: ponowienie z backoffem albo porzucenie po wyczerpaniu podejść. */
     private void recordFailure(OutboxMessage message, int attempt, Exception cause) {
         String error = trim(cause.getClass().getSimpleName() + ": " + cause.getMessage());
 
         try {
             if (attempt >= properties.maxAttempts()) {
                 shortTransaction.execute(status -> repository.markFailed(message.getId(), error));
-                // ERROR, nie WARN: to jest stan wymagający człowieka. Liczbę takich wiadomości
-                // daje OutboxMessageRepository.countFailed() - i to jest odpowiedź na pytanie
-                // "czy maile w ogóle wychodzą", której wcześniej nie było jak uzyskać.
+                // Poziom ERROR, nie WARN: jest to stan wymagający reakcji człowieka. Liczbę takich
+                // wiadomości podaje osobne zapytanie repozytorium i to ona odpowiada na pytanie,
+                // czy poczta w ogóle wychodzi.
                 log.error("Mail porzucony po {} podejściach (id={}, szablon={}): {}",
                         attempt, message.getId(), message.getTemplate(), error);
                 return;
             }
 
-            // Backoff wykładniczy - chwilowa awaria SMTP nie zamienia się w dobijanie serwera
+            // Backoff wykładniczy sprawia, że chwilowa awaria serwera pocztowego nie zamienia się
+            // w dobijanie go kolejnymi próbami.
             Duration delay = properties.retryBackoff().multipliedBy(1L << (attempt - 1));
-            // Obcięcie jak wszędzie w tej ścieżce: ten znacznik też jest potem porównywany
-            // warunkiem "<= now", więc zaokrąglenie w górę odsuwałoby ponowienie o mikrosekundę
-            // i - przy dostatecznie krótkim backoffie - powtarzało ten sam wyścig.
+            // Obcięcie znacznika do precyzji kolumny: wartość jest potem porównywana warunkiem
+            // "<= now", więc zaokrąglenie w górę odsuwałoby ponowienie i przy krótkim backoffie
+            // powtarzało ten sam wyścig.
             Instant nextRetry = DbClock.truncate(Instant.now().plus(delay));
 
             shortTransaction.execute(status -> repository.markRetry(message.getId(), nextRetry, error));
@@ -245,14 +228,14 @@ public class OutboxPublisher {
                     message.getId(), attempt, properties.maxAttempts(), delay, error);
 
         } catch (Exception e) {
-            // Padł zapis wyniku, a nie sama wysyłka. Wiersz zostaje z rezerwacją, więc
-            // wróci sam po jej upływie - to jest dokładnie ten scenariusz, dla którego
-            // rezerwacja jest oknem czasowym, a nie statusem.
+            // Zawiódł zapis wyniku, a nie sama wysyłka. Wiersz zachowuje rezerwację, więc wróci
+            // samoczynnie po jej upływie - dokładnie ten scenariusz, dla którego rezerwacja jest
+            // oknem czasowym, a nie statusem.
             log.error("Nie udało się zapisać wyniku wysyłki (id={}): {}", message.getId(), e.toString());
         }
     }
 
-    /** Kolumna last_error ma 500 znaków - dłuższy komunikat wywaliłby zapis wyniku. */
+    /** Kolumna z opisem błędu mieści 500 znaków - dłuższy komunikat przerwałby zapis wyniku. */
     private String trim(String value) {
         if (value == null) {
             return null;
@@ -261,9 +244,10 @@ public class OutboxPublisher {
     }
 
     /**
-     * Przy zamykaniu aplikacji dajemy trwającym wysyłkom dokończyć. Ubicie ich w locie
-     * oznaczałoby maile wysłane bez zapisanego statusu, czyli powtórki po restarcie -
-     * dopuszczalne, ale niepotrzebne, skoro wystarczy chwilę poczekać.
+     * Pozwala trwającym wysyłkom dokończyć się przy zamykaniu aplikacji.
+     *
+     * Przerwanie ich w locie oznaczałoby maile wysłane bez zapisanego statusu, czyli powtórki po
+     * restarcie - dopuszczalne, ale niepotrzebne, skoro wystarczy odczekać do końca paczki.
      */
     @PreDestroy
     void shutdown() throws InterruptedException {

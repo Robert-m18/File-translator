@@ -33,7 +33,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * użytkownika, więc jedna osoba psuje wtedy usługę wszystkim pozostałym.
  *
  * Limit ustawiony niżej niż na profilu testowym przez @TestPropertySource, żeby nie budować
- * pliku o 50 tys. znaków. Osobny kontekst jest tu ceną, którą płacimy świadomie.
+ * pliku o dużej liczbie znaków. Osobny kontekst jest tu świadomie przyjętą ceną.
  */
 @SpringBootTest
 @AutoConfigureMockMvc

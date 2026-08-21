@@ -40,7 +40,7 @@ import static org.mockito.Mockito.when;
  *
  * Tej własności NIE DA SIĘ sprawdzić przez API: żeby ją zobaczyć, trzeba wywołać awarię
  * MIĘDZY dwoma zapisami, a to wymaga podstawienia atrapy magazynu. Test przez MockMvc
- * z @MockitoBean kosztowałby OSOBNY kontekst Springa, czyli kolejną pulę połączeń trzymaną
+ * z atrapą wstrzykiwaną do kontekstu wymagałby osobnego kontekstu Springa, czyli kolejnej puli
  * do końca JVM-a - a suite wywróciła się już raz na wyczerpanym max_connections. Zwykły test
  * jednostkowy odpowiada na to samo pytanie i nie kosztuje ani jednego kontekstu.
  *

@@ -21,9 +21,8 @@ import java.nio.charset.StandardCharsets;
  * wejścia Spring Security. Filtry działają PRZED DispatcherServletem, więc rzucony
  * w nich wyjątek nigdy nie trafi do globalnego handlera wyjątków.
  *
- * Serializację robi Jackson, a nie ręczne sklejanie stringa. Poprzednia wersja
- * budowała JSON przez String.format, przez co komunikat zawierający cudzysłów
- * albo backslash produkował niepoprawny JSON.
+ * Serializację wykonuje biblioteka JSON, a nie ręczne sklejanie tekstu: komunikat zawierający
+ * cudzysłów albo ukośnik wsteczny dałby przy sklejaniu niepoprawny dokument JSON.
  *
  * Uwaga na import: Spring Boot 4 przeszedł na Jackson 3 (pakiet tools.jackson).
  * Stary com.fasterxml.jackson.databind.ObjectMapper bywa jeszcze na classpath

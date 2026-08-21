@@ -20,6 +20,9 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
+/**
+ * Dostęp do tabeli users: wyszukiwanie kont, liczniki logowania i operacje panelu.
+ */
 @Repository
 public interface UserRepository extends JpaRepository<User, Long> {
 
@@ -28,20 +31,20 @@ public interface UserRepository extends JpaRepository<User, Long> {
     boolean existsByEmail(String email);
 
     /**
-     * Konto powiązane z danym kontem Google (roszczenie "sub" z tokenu ID).
+     * Zwraca konto powiązane z danym kontem Google (roszczenie "sub" z tokenu tożsamości).
      *
-     * Pytamy najpierw o to, a dopiero potem o adres - bo "sub" jest tożsamością, a adres
-     * tylko sposobem pierwszego skojarzenia. Adres w koncie Google da się zmienić, więc
-     * odwrotna kolejność odcinałaby użytkownika od jego konta po takiej zmianie.
+     * Wyszukiwanie po tym identyfikatorze poprzedza wyszukiwanie po adresie, ponieważ to on
+     * jest tożsamością, a adres tylko sposobem pierwszego skojarzenia. Adres konta Google
+     * można zmienić, więc odwrotna kolejność odcinałaby użytkownika od konta po takiej zmianie.
      */
     Optional<User> findByGoogleSub(String googleSub);
 
     /*
-     * Liczniki nieudanych logowań aktualizujemy zapytaniem UPDATE, a nie przez
-     * wczytanie encji, zmianę pola i zapis. Powód: dwa równoległe nieudane logowania
-     * na to samo konto odczytałyby tę samą wartość i drugi zapis nadpisałby pierwszy
-     * (lost update) - licznik rósłby wolniej niż liczba prób, czyli dokładnie tam,
-     * gdzie zależy nam na dokładności. UPDATE ... SET x = x + 1 jest atomowy w bazie.
+     * Liczniki nieudanych logowań aktualizowane są zapytaniem UPDATE, a nie przez wczytanie
+     * encji, zmianę pola i zapis. Dwa równoległe nieudane logowania na to samo konto
+     * odczytałyby tę samą wartość, a drugi zapis nadpisałby pierwszy, przez co licznik rósłby
+     * wolniej niż liczba prób - dokładnie tam, gdzie zależy nam na dokładności. Zapytanie
+     * postaci "SET x = x + 1" jest w bazie atomowe.
      */
 
     @Modifying(clearAutomatically = true)
@@ -60,15 +63,15 @@ public interface UserRepository extends JpaRepository<User, Long> {
     Optional<Integer> findFailedLoginAttempts(@Param("email") String email);
 
     /**
-     * Zdejmuje blokadę, która już wygasła, i zeruje przy tym licznik.
+     * Zdejmuje blokadę, która już wygasła, i zeruje przy tym licznik prób.
      *
-     * Bez tego blokada praktycznie się nie kończyła. Licznik zerował wyłącznie UDANY
-     * login, więc po upływie lockedUntil zostawał na progu (np. 5 z 5) i pierwsza
-     * literówka dawała 6 >= 5, czyli natychmiastową blokadę na kolejne 15 minut.
-     * Użytkownik, który nie pamięta hasła dokładnie, nie miał jak z tej pętli wyjść.
+     * Bez tego kroku blokada praktycznie się nie kończyła: licznik zeruje wyłącznie udane
+     * logowanie, więc po upływie terminu pozostawał na progu i pierwsza literówka nakładała
+     * blokadę natychmiast. Użytkownik, który nie pamięta hasła dokładnie, nie miał jak wyjść
+     * z tej pętli.
      *
-     * Warunek na lockedUntil sprawia, że zapytanie nie rusza kont, które jeszcze
-     * odsiadują blokadę, ani tych, które nigdy nie były zablokowane.
+     * Warunek na termin blokady sprawia, że zapytanie nie rusza kont, które nadal ją odsiadują,
+     * ani tych, które nigdy nie były zablokowane.
      */
     @Modifying(clearAutomatically = true)
     @Query("""
@@ -80,29 +83,26 @@ public interface UserRepository extends JpaRepository<User, Long> {
     /* ---------------------------------------------------------------------------------
      * Panel administracyjny.
      *
-     * Odczyty idą PROJEKCJĄ, nie encją - ta sama zasada co w TranslationJobRepository,
-     * ale tutaj powodem nie jest rozmiar wiersza, tylko hash hasła: encja User jest
-     * jednocześnie UserDetails i zwrócona z kontrolera wypuściłaby hash do API.
+     * Odczyty korzystają z projekcji, nie z encji: encja User jest jednocześnie obiektem
+     * UserDetails i niesie hash hasła, więc zwrócona z kontrolera wypuściłaby go do API.
      * --------------------------------------------------------------------------------- */
 
     /**
-     * Lista kont dla panelu, filtrowana po fragmencie adresu.
+     * Zwraca stronę kont dla panelu, filtrowaną po fragmencie adresu.
      *
-     * lower(u.email) po stronie KOLUMNY, mimo że EmailNormalizer sprowadza nowe adresy do
-     * małych liter przy zapisie: wiersze sprzed wprowadzenia normalizacji mogą mieć wielkie
-     * litery, a PostgreSQL porównuje teksty z rozróżnianiem wielkości. Bez tego administrator
-     * szukający "kowalski" nie znalazłby konta zapisanego jako "Kowalski@example.com" -
-     * czyli filtr milczałby zamiast odpowiedzieć. Regresja: AdminPanelTest.search_shouldIgnoreCase.
+     * Funkcja lower() po stronie kolumny jest potrzebna mimo normalizacji adresów przy zapisie:
+     * wiersze sprzed jej wprowadzenia mogą zawierać wielkie litery, a PostgreSQL porównuje
+     * teksty z rozróżnianiem wielkości. Bez niej wyszukiwanie nie znalazłoby konta zapisanego
+     * z wielkiej litery, czyli filtr milczałby zamiast odpowiedzieć.
      *
-     * ESCAPE '!' zamiast domyślnego backslasha: PostgreSQL i H2 przyjmują backslash same
-     * z siebie, ale to zachowanie domyślne silnika, a nie kontrakt zapytania - a HQL traktuje
-     * backslash w literale znakowym jako początek sekwencji ucieczki, więc zapis samego
-     * znaku jest tam dwuznaczny. Wykrzyknik jest jednoznaczny w obu warstwach. Wzorzec
-     * buduje UserService.likePattern, który escape'uje %, _ oraz sam znak ucieczki - bez
-     * tego q=% zwracałoby całą bazę, czyli filtr po cichu przestawałby filtrować.
+     * Znak ucieczki to wykrzyknik, a nie domyślny odwrotny ukośnik: obie bazy przyjmują ukośnik
+     * z własnej inicjatywy, ale jest to zachowanie domyślne silnika, a nie kontrakt zapytania,
+     * a HQL traktuje odwrotny ukośnik w literale znakowym jako początek sekwencji ucieczki, więc
+     * jego zapis jest tam dwuznaczny. Sam wzorzec buduje UserService, escapując metaznaki -
+     * bez tego zapytanie złożone z procentu zwracałoby całą bazę.
      *
-     * countQuery podany jawnie - przy wyrażeniu konstruktora przepisanie zapytania na count
-     * przez Spring Data jest zawodne (ta sama uwaga co przy findSummaries).
+     * Zapytanie zliczające podane jest jawnie, ponieważ przy wyrażeniu konstruktora automatyczne
+     * przepisanie na count bywa zawodne.
      */
     @Query(value = """
             select new com.example.filetranslator.user.dto.AdminUserView(
@@ -118,6 +118,7 @@ public interface UserRepository extends JpaRepository<User, Long> {
                     """)
     Page<AdminUserView> findAdminViews(@Param("pattern") String pattern, Pageable pageable);
 
+    /** Pojedyncze konto w widoku panelu - ta sama projekcja co na liście. */
     @Query("""
             select new com.example.filetranslator.user.dto.AdminUserView(
                 u.id, u.name, u.email, u.role, u.createdAt,
@@ -130,14 +131,13 @@ public interface UserRepository extends JpaRepository<User, Long> {
     /**
      * Nakłada blokadę administracyjną.
      *
-     * Warunek "blockedAt is null" czyni operację idempotentną i chroni ŚLAD AUDYTOWY:
-     * ponowne zablokowanie już zablokowanego konta nie podmienia powodu ani daty na nowe,
-     * więc informacja o tym, kiedy i za co konto padło, nie ginie przy przypadkowym
-     * dwukliku. Regresja: AdminPanelTest.block_shouldBeIdempotent.
+     * Warunek wykluczający konta już zablokowane czyni operację idempotentną i chroni ślad
+     * audytowy: ponowne zablokowanie nie podmienia daty ani powodu, więc informacja o tym,
+     * kiedy i za co konto zostało zablokowane, nie ginie przy przypadkowym dwukliku.
      *
-     * @return 1 przy faktycznej zmianie, 0 gdy konto było już zablokowane albo nie istnieje -
-     *         wołający rozróżnia te dwa przypadki wcześniejszym odczytem, bo tylko on
-     *         odróżnia "nie ma takiego konta" od "nic nie trzeba było robić"
+     * @return 1 przy faktycznej zmianie, 0 gdy konto było już zablokowane albo nie istnieje;
+     *         wołający rozróżnia te przypadki wcześniejszym odczytem, bo tylko on odróżnia
+     *         brak konta od braku potrzeby zmiany
      */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""
@@ -147,40 +147,37 @@ public interface UserRepository extends JpaRepository<User, Long> {
     int blockAccount(@Param("id") Long id, @Param("now") Instant now, @Param("reason") String reason);
 
     /**
-     * Zdejmuje blokadę administracyjną - i wyłącznie ją.
+     * Zdejmuje blokadę administracyjną i wyłącznie ją.
      *
-     * Nie rusza failedLoginAttempts ani lockedUntil: to osobny stan, zdejmowany osobną
-     * akcją panelu. Odblokowanie konta nie ma prawa przy okazji kasować śladu po serii
-     * nieudanych logowań, bo to może być właśnie ten trop, przez który konto zablokowano.
+     * Licznik nieudanych logowań pozostaje nietknięty, bo jest osobnym stanem zdejmowanym
+     * osobną akcją panelu. Odblokowanie konta nie powinno kasować śladu po serii nieudanych
+     * logowań, ponieważ może to być właśnie powód, dla którego konto zablokowano.
      */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("update User u set u.blockedAt = null, u.blockedReason = null where u.id = :id")
     int unblockAccount(@Param("id") Long id);
 
-    /** Wariant clearLoginFailures po id - panel operuje na identyfikatorach, nie na adresach. */
+    /** Zeruje licznik nieudanych logowań po identyfikatorze - panel operuje na id, nie na adresach. */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("update User u set u.failedLoginAttempts = 0, u.lockedUntil = null where u.id = :id")
     int clearLoginLock(@Param("id") Long id);
 
     /**
-     * Kasuje konto. Nieodwracalnie i razem ze wszystkim, co od niego zależy.
+     * Kasuje konto nieodwracalnie, razem ze wszystkim, co od niego zależy.
      *
-     * KASKADA JEST PO STRONIE BAZY, nie Hibernate'a: klucze obce w refresh_tokens,
-     * password_reset_tokens, verification_tokens i translation_jobs mają ON DELETE CASCADE
-     * (changesety 0001, 0002, 0004, 0007), więc te wiersze giną w TEJ SAMEJ transakcji co
-     * konto. Kasowanie ich osobno z aplikacji byłoby czterema zapytaniami zamiast jednego,
-     * a przy awarii w połowie zostawiłoby konto bez sesji i bez zleceń - stan gorszy niż
-     * jedno i drugie.
+     * Kaskada realizowana jest po stronie bazy: klucze obce w refresh_tokens,
+     * password_reset_tokens, verification_tokens i translation_jobs mają ON DELETE CASCADE,
+     * więc wiersze zależne znikają w tej samej transakcji co konto. Kasowanie ich osobno
+     * z aplikacji byłoby czterema zapytaniami zamiast jednego, a awaria w połowie zostawiłaby
+     * konto bez sesji i bez zleceń - stan gorszy niż jedno i drugie.
      *
-     * Zapytaniem JPQL, a nie deleteById: nie ma po co wczytywać encji tylko po to, żeby ją
-     * skasować, a liczba zmienionych wierszy odróżnia "skasowano" od "ktoś był szybszy".
-     * Encja User jest jednocześnie UserDetails, więc jej wczytanie ściąga też hash hasła.
+     * Zapytanie JPQL zamiast deleteById, ponieważ nie ma potrzeby wczytywania encji tylko po
+     * to, żeby ją skasować (encja niesie hash hasła), a liczba zmienionych wierszy odróżnia
+     * skasowanie od sytuacji, w której konta już nie było.
      *
-     * NIE dotyka pending_registrations ani outbox_messages, i to jest świadome:
-     * poczekalnia jest kluczowana adresem (bez klucza obcego), a zgłoszenia na adres
-     * z ISTNIEJĄCYM kontem i tak nie powstają - confirmEmail kasuje wszystkie zgłoszenia
-     * na dany adres w chwili zakładania konta. Skrzynka nadawcza ma własną retencję
-     * (doba od wysyłki), krótszą niż cokolwiek, co dałoby się z niej odczytać.
+     * Zapytanie nie dotyka poczekalni rejestracyjnej ani skrzynki nadawczej. Poczekalnia jest
+     * kluczowana adresem i zgłoszenia na adres z istniejącym kontem nie powstają, a skrzynka
+     * ma własną retencję krótszą niż ważność czegokolwiek, co dałoby się z niej odczytać.
      *
      * @return 1 przy skasowaniu, 0 gdy konta już nie było
      */
@@ -189,16 +186,17 @@ public interface UserRepository extends JpaRepository<User, Long> {
     int deleteAccount(@Param("id") Long id);
 
     /**
-     * Identyfikatory administratorów, którzy NIE są zablokowani - odczyt z blokadą wierszy.
+     * Zwraca identyfikatory niezablokowanych administratorów, blokując ich wiersze do końca
+     * transakcji.
      *
-     * PESSIMISTIC_WRITE, bo bez niego dwóch administratorów blokujących się nawzajem
-     * w tej samej chwili przeczytałoby ten sam stan ("jest nas dwóch, więc wolno") i obaj
-     * przeszliby kontrolę. Efektem byłoby zero niezablokowanych administratorów, a wyjściem
-     * z tego stanu wyłącznie ręczny UPDATE w bazie: AdminBootstrap z założenia NIE promuje
-     * istniejącego konta USER na ADMIN, więc aplikacja sama by się z tego nie podniosła.
+     * Blokada zapisu jest konieczna, ponieważ bez niej dwóch administratorów działających na
+     * siebie nawzajem w tej samej chwili odczytałoby ten sam stan i obaj przeszliby kontrolę
+     * "czy zostanie choć jeden". Efektem byłby brak jakiegokolwiek niezablokowanego
+     * administratora, a jedynym wyjściem ręczna zmiana w bazie - proces startowy celowo nie
+     * promuje istniejącego konta zwykłego użytkownika na administratora.
      *
-     * Bez SKIP LOCKED, w odróżnieniu od kolejek: tam chodzi o rozdzielenie pracy między
-     * instancje, tutaj drugi wołający ma POCZEKAĆ i zobaczyć wynik pierwszego.
+     * W odróżnieniu od kolejek nie ma tu pomijania zablokowanych wierszy: drugi wołający ma
+     * poczekać i zobaczyć wynik pierwszego, a nie ominąć go.
      */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("""

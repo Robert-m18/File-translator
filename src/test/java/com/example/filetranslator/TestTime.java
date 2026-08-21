@@ -7,19 +7,19 @@ import java.time.ZoneOffset;
 /**
  * Zamienia Instant na typ, który potrafi zbindować sterownik JDBC.
  *
- * DLACZEGO TO ISTNIEJE - JdbcTemplate wywołuje setObject() BEZ podania typu SQL, a sterownik
- * PostgreSQL-a nie umie go wywnioskować z java.time.Instant i przerywa komunikatem
- * "Can't infer the SQL type to use for an instance of java.time.Instant". Sterownik H2 ten sam
- * parametr przyjmuje bez mrugnięcia, więc na profilu -Ph2 tego nie widać wcale, a domyślny przebieg
- * pada - i to na ZAPYTANIU, które nie ma nic wspólnego z badaną logiką, przez co komunikat
- * "bad SQL grammar" prowadzi śledztwo na SQL zamiast na typ parametru.
- * Zmierzone 2026-08-09 przy migracji na timestamptz: 7 błędów na PostgreSQL-u (wtedy: w osobnym
- * jobie CI) przy 110 zielonych na H2.
+ * Klasa istnieje, ponieważ szablon JDBC ustawia parametr bez podania typu SQL, a sterownik
+ * bazy produkcyjnej nie potrafi wywnioskować go z typu reprezentującego punkt na osi czasu
+ * i przerywa. Sterownik bazy używanej w wariancie bez Dockera przyjmuje ten sam parametr bez
+ * zastrzeżeń, więc problemu tam nie widać, a domyślny przebieg pada - i to na zapytaniu, które
+ * nie ma nic wspólnego z badaną logiką, przez co komunikat o błędnej składni SQL prowadzi
+ * poszukiwania w stronę zapytania zamiast typu parametru.
+
+
  *
- * OffsetDateTime, a nie java.sql.Timestamp: to standardowe odwzorowanie JDBC 4.2 dla kolumny
- * TIMESTAMP WITH TIME ZONE i oba sterowniki je znają. Timestamp też by przeszedł, ale sterownik
- * interpretuje go w strefie domyślnej JVM-a - czyli wprowadzałby z powrotem zależność od strefy
- * dokładnie tam, gdzie właśnie ją usunęliśmy.
+ * Konwersja idzie na typ z przesunięciem strefowym, a nie na starszy typ znacznika czasu: jest
+ * to standardowe odwzorowanie kolumny czasowej ze strefą i znają je oba sterowniki. Starszy typ
+ * również by przeszedł, ale sterownik interpretuje go w strefie domyślnej maszyny wirtualnej,
+ * czyli wprowadzałby z powrotem zależność od strefy dokładnie tam, gdzie została usunięta.
  *
  * Dotyczy wyłącznie surowego JDBC w testach. Kod produkcyjny idzie przez Hibernate, który mapuje
  * Instant sam i tego problemu nie ma.

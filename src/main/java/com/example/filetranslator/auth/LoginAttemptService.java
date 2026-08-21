@@ -48,14 +48,14 @@ public class LoginAttemptService {
             return;
         }
 
-        // Najpierw sprzątamy po blokadzie, która już wygasła. Inaczej licznik zostaje
+        // Najpierw zdejmowana jest blokada, która już wygasła. Inaczej licznik zostaje
         // na progu z poprzedniej serii i ta jedna próba blokuje konto od razu -
         // szczegóły przy UserRepository.clearExpiredLock.
         userRepository.clearExpiredLock(email, Instant.now());
 
         int updated = userRepository.incrementFailedLoginAttempts(email);
         if (updated == 0) {
-            // Nie ma takiego konta. Świadomie nie prowadzimy licznika dla nieistniejących
+            // Nie ma takiego konta. Licznik świadomie nie jest prowadzony dla nieistniejących
             // adresów - byłby to kanał do sprawdzania, które adresy są zarejestrowane.
             return;
         }
@@ -73,7 +73,7 @@ public class LoginAttemptService {
         if (!properties.enabled()) {
             return;
         }
-        // Liczymy KOLEJNE nieudane próby, więc udane logowanie zeruje licznik.
+        // Liczone są kolejne nieudane próby, więc udane logowanie zeruje licznik.
         // Bez tego konto używane od lat zablokowałoby się po zsumowaniu literówek.
         userRepository.resetFailedLoginAttempts(email);
     }

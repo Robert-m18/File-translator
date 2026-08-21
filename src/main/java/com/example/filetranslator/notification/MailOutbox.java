@@ -18,17 +18,18 @@ import java.util.Map;
 /**
  * Zamawianie maili. Jedyne wejście do skrzynki nadawczej dla reszty aplikacji.
  *
- * WAŻNE dla wołających: te metody NIE wysyłają maila, tylko zapisują zamówienie.
- * Trzeba je wołać wewnątrz transakcji operacji, która mail zamawia - wtedy zamiar wysyłki
- * commituje się razem z nią albo wcale. Wycofana rejestracja nie zostawia po sobie
- * zamówienia, więc nie da się wysłać linku do konta, które nie powstało.
+ * Metody tej klasy nie wysyłają maila, tylko zapisują zamówienie, i trzeba je wołać wewnątrz
+ * transakcji operacji, która mail zamawia. Zamiar wysyłki commituje się wtedy razem z nią albo
+ * wcale, więc wycofana rejestracja nie zostawia zamówienia i nie da się wysłać linku do konta,
+ * które nie powstało.
  *
- * Zastąpiło to zdarzenia @TransactionalEventListener(AFTER_COMMIT). Tamten wariant też nie
- * wysyłał maili dla wycofanych transakcji, ale zamiar wysyłki żył wyłącznie w pamięci
- * procesu: awaria SMTP albo restart poda między commitem a wysyłką kasowały go bez śladu.
+ * Zapis zamówienia w bazie, zamiast wysyłki po zatwierdzeniu transakcji, jest tym, co pozwala
+ * przetrwać awarii serwera pocztowego i restartowi aplikacji: zamiar wysyłki nie żyje w pamięci
+ * procesu, tylko w tabeli, z której podejmie go najbliższy cykl wysyłkowy.
  *
- * Klasa siedzi w notification, a wołana jest z auth. Kierunek zależności jest zamierzony:
- * auth wie, że chce wysłać mail, a notification nie wie nic o rejestracji ani o resetach.
+ * Klasa należy do pakietu powiadomień, a wołana jest z obszaru uwierzytelniania. Kierunek
+ * zależności jest zamierzony: obszar wywołujący wie, że chce wysłać wiadomość, a pakiet
+ * powiadomień nie wie nic o rejestracji ani o resetach haseł.
  */
 @Slf4j
 @Service
@@ -73,13 +74,11 @@ public class MailOutbox {
                 DbClock.now()
         ));
 
-        // Bez adresu w logu - to dane osobowe. Do powiązania z konkretnym żądaniem
-        // służy traceId dokładany przez TraceIdFilter.
-        //
-        // id jest tu po to, żeby dało się przejść od żądania do wysyłki. OutboxPublisher
-        // pracuje na wątku harmonogramu i na wątkach puli wysyłkowej, gdzie MDC jest puste,
-        // więc jego logi nie mają traceId - i bez id po obu stronach łańcuch urywał się
-        // dokładnie w tym miejscu. Teraz: traceId -> id (tutaj), id -> wynik (tam).
+        // Bez adresu w logu - to dana osobowa; powiązanie z żądaniem daje jego identyfikator.
+        // Identyfikator wiadomości jest tu po to, żeby dało się przejść od żądania do wysyłki:
+        // wysyłka pracuje na wątkach harmonogramu i puli wysyłkowej, gdzie identyfikator żądania
+        // nie istnieje, więc bez wspólnego identyfikatora wiadomości łańcuch diagnostyczny
+        // urywałby się w tym miejscu.
         log.info("Mail zamówiony w skrzynce nadawczej (id={}, szablon={})", saved.getId(), template);
     }
 }

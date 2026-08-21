@@ -25,25 +25,23 @@ import java.util.stream.Collectors;
 /**
  * Zakłada przy starcie jedno konto z rolą ADMIN, jeśli go jeszcze nie ma.
  *
- * Po co: Role.ADMIN był w enumie od początku, ale nic go nigdy nie przypisywało -
- * jedyne miejsce zakładania konta (UserService.createConfirmedUser) wpisuje na sztywno
- * Role.USER. Skutek był taki, że /actuator/metrics i /actuator/prometheus stały za
- * hasRole("ADMIN") nieosiągalne dla nikogo, czyli były martwe.
+ * Jest to jedyna ścieżka nadająca rolę administratora: rejestracja przypisuje rolę zwykłego
+ * użytkownika na sztywno, więc bez tego komponentu endpointy chronione rolą administratora
+ * byłyby nieosiągalne dla nikogo.
  *
- * To PIERWSZY poza potwierdzeniem rejestracji pisarz do tabeli users, więc obowiązują
- * go te same niezmienniki: konto powstaje od razu z enabled = true (wiersz z enabled =
- * false jest w tej aplikacji stanem niemożliwym), a hasło idzie przez BCrypt.
+ * Klasa jest drugim, obok potwierdzenia rejestracji, miejscem zapisującym do tabeli kont, więc
+ * obowiązują ją te same niezmienniki: konto powstaje od razu aktywne, a hasło przechodzi przez
+ * funkcję haszującą.
  *
- * Dlaczego kod, a nie changeset Liquibase: migracja nie policzy BCrypta, więc trzeba by
- * wpisać gotowy hash do repozytorium - czyli rozesłać to samo hasło administratora do
- * wszystkich środowisk. Taki wiersz wchodziłby też do każdego kontekstu testowego
- * i łamałby konwencję, że żaden changeset nie wstawia danych.
+ * Konto zakładane jest w kodzie, a nie migracją bazy, ponieważ migracja nie policzy skrótu
+ * hasła - trzeba by wpisać do repozytorium gotowy hash, czyli rozesłać to samo hasło
+ * administratora do wszystkich środowisk. Taki wiersz trafiałby też do każdego kontekstu
+ * testowego i łamał zasadę, że migracje nie wstawiają danych.
  *
- * Dwie reguły poniżej są nośne i nie wolno ich "uprościć":
- * - istniejącego konta NIE nadpisujemy hasłem z konfiguracji (restart nie może cofać
- *   rotacji hasła),
- * - istniejącego konta z rolą USER NIE podnosimy do ADMIN (literówka w adresie nie może
- *   po cichu oddać cudzego konta razem z dostępem do aktuatora).
+ * Dwie reguły poniżej są nośne i nie wolno ich upraszczać: hasło istniejącego konta nie jest
+ * nadpisywane wartością z konfiguracji, żeby restart nie cofał rotacji hasła, a istniejące konto
+ * zwykłego użytkownika nie jest podnoszone do roli administratora, żeby literówka w adresie nie
+ * oddała po cichu cudzego konta razem z dostępem do danych operacyjnych.
  */
 @Slf4j
 @Component
@@ -63,9 +61,9 @@ public class AdminBootstrap implements ApplicationRunner {
     private final Validator validator;
 
     /**
-     * Cienka obwoluta na createAdminIfMissing - tak jak @Scheduled w OutboxPublisher.
-     * Cała logika siedzi w metodzie publicznej, którą testy wołają wprost, zamiast
-     * polegać na tym, co wykona się przy starcie kontekstu.
+     * Cienka obwoluta na metodę poniżej. Cała logika znajduje się w metodzie publicznej,
+     * którą testy wołają wprost, zamiast polegać na tym, co wykona się przy starcie
+     * kontekstu aplikacji.
      */
     @Override
     public void run(ApplicationArguments args) {
@@ -99,8 +97,8 @@ public class AdminBootstrap implements ApplicationRunner {
             if (user.getRole() == Role.ADMIN) {
                 log.info("Konto administratora już istnieje (id={}) - nie zmieniam hasła", user.getId());
             } else {
-                // WARN, nie INFO: to jedyny sygnał, jaki dostaje operator, gdy pomylił adres
-                // i wskazał konto prawdziwego użytkownika. Komunikat musi mówić, czego NIE zrobił.
+                // Poziom WARN, nie INFO: jest to jedyny sygnał dla operatora, który pomylił adres
+                // i wskazał konto istniejącego użytkownika. Komunikat mówi wprost, czego nie zrobiono.
                 log.warn("Konto o podanym adresie istnieje z rolą {} (id={}) - NIE podnoszę uprawnień "
                         + "do ADMIN. Popraw app.admin.email albo zmień rolę ręcznie.",
                         user.getRole(), user.getId());
@@ -113,16 +111,16 @@ public class AdminBootstrap implements ApplicationRunner {
             log.info("Utworzono konto administratora (id={})", admin.getId());
         } catch (DataIntegrityViolationException e) {
             /*
-             * Wyścig dwóch instancji startujących równocześnie - rozstrzyga go unikat
-             * uk_users_email. Traktujemy jak "już istnieje" i NIE przerywamy startu:
-             * odmowa wstania z powodu tego, że sąsiednia instancja zdążyła pierwsza,
-             * byłaby gorszą awarią niż problem, przed którym chroni.
+             * Wyścig dwóch instancji startujących równocześnie rozstrzyga
+             * unikalny indeks na adresie. Sytuacja traktowana jest jak "konto już istnieje" i nie
+             * przerywa startu: odmowa wstania z powodu tego, że sąsiednia instancja zdążyła
+             * pierwsza, byłaby gorszą awarią niż problem, przed którym ta kontrola chroni.
              *
-             * Wyjątek musi być łapany TUTAJ, poza granicą @Transactional z UserService -
+             * Wyjątek musi być łapany w tym miejscu, poza granicą transakcji serwisu:
              * w środku transakcja jest już oznaczona rollback-only i przy zatwierdzaniu
              * poleciałby UnexpectedRollbackException obok tego handlera.
              *
-             * Świadomie bez e.getMessage() w logu: tekst sterownika zawiera kolidującą
+             * W logu świadomie nie ma komunikatu wyjątku: tekst sterownika zawiera kolidującą
              * wartość, czyli adres email.
              */
             log.info("Konto administratora zostało w międzyczasie założone przez inną instancję");
@@ -133,7 +131,7 @@ public class AdminBootstrap implements ApplicationRunner {
      * Sprawdza dane konta polityką rejestracji - przez UserRequestDTO, nie przez własny
      * komplet adnotacji.
      *
-     * Dzięki temu konto administratora jest trzymane DOKŁADNIE tym samym kontraktem co
+     * Dzięki temu konto administratora podlega dokładnie temu samemu kontraktowi co
      * konto zwykłego użytkownika (@ValidPassword, @ValidEmail, długość imienia) i nie da
      * się przez konfigurację wprowadzić hasła słabszego, niż przyjmuje rejestracja.
      * Osobny rekord walidacyjny byłby drugą kopią tych samych reguł, czyli dokładnie tym
@@ -148,8 +146,8 @@ public class AdminBootstrap implements ApplicationRunner {
         }
 
         /*
-         * Komunikat składany WYŁĄCZNIE ze ścieżki pola i tekstu reguły. ConstraintViolation
-         * niesie też getInvalidValue(), a tam siedzi raz jawne hasło, raz adres email -
+         * Komunikat składany jest wyłącznie ze ścieżki pola i tekstu reguły. Naruszenie reguły
+         * niesie także odrzuconą wartość, czyli raz jawne hasło, raz adres e-mail -
          * jedno i drugie ma zakaz trafiania do logów, a ten wyjątek kończy start aplikacji,
          * więc jego treść pojawi się w konsoli i w zbieraczu logów.
          */

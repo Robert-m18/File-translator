@@ -29,9 +29,9 @@ import java.util.UUID;
  *
  *  1. Każde użycie tokenu odświeżającego zużywa go i wydaje nowy - token działa raz.
  *  2. Wszystkie tokeny z kolejnych rotacji jednej sesji mają wspólny family_id.
- *  3. Próba użycia tokenu już zużytego oznacza, że ktoś ma jego kopię - albo klient
- *     ponawia żądanie, albo token wyciekł. Nie da się tego rozróżnić, więc traktujemy
- *     to jako włamanie i unieważniamy CAŁĄ rodzinę.
+ *  3. Próba użycia tokenu już zużytego oznacza, że istnieje jego kopia - albo klient
+ *     ponawia żądanie, albo token wyciekł. Nie da się tego rozróżnić, więc traktowane jest
+ *     jako włamanie, więc unieważniana jest cała rodzina tokenów.
  *
  * Efekt: napastnik, który ukradł token, może z niego skorzystać najwyżej raz, a przy
  * najbliższym odświeżeniu przez prawowitego użytkownika (albo odwrotnie) sesja pada
@@ -49,7 +49,7 @@ public class RefreshTokenService {
      * Szablon transakcji uruchamianej niezależnie od bieżącej (PROPAGATION_REQUIRES_NEW).
      *
      * Potrzebny, bo unieważnienie rodziny po wykryciu kradzieży musi zostać ZATWIERDZONE,
-     * a zaraz po nim rzucamy wyjątek - który wycofuje transakcję odświeżania. W jednej
+     * a zaraz po nim leci wyjątek, który wycofuje transakcję odświeżania. W jednej
      * transakcji unieważnienie zniknęłoby razem z nią i skradziony token dalej by działał,
      * czyli cały mechanizm byłby pozorny.
      *

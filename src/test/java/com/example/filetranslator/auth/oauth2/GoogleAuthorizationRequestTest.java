@@ -93,7 +93,7 @@ class GoogleAuthorizationRequestTest {
      * KONTROLA NEGATYWNA dla wpięcia oauth2Login.
      *
      * Konfigurator logowania OAuth2 potrafi PODMIENIĆ domyślny punkt wejścia
-     * uwierzytelnienia na przekierowanie do dostawcy. Gdyby wygrał z naszym
+     * uwierzytelnienia na przekierowanie do dostawcy. Gdyby wygrał z jawnie ustawionym
      * RestAuthenticationEntryPoint, chronione ścieżki oddawałyby 302 do Google zamiast
      * 401 z ciałem ProblemDetail - a frontend wołający fetch dostałby przekierowanie
      * na cudzą domenę, czyli błąd CORS zamiast czytelnego "sesja wygasła".

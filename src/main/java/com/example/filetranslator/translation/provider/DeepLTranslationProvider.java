@@ -23,33 +23,30 @@ import java.util.Map;
 import java.util.function.Supplier;
 
 /**
- * Tłumaczenie przez DeepL API.
+ * Implementacja portu tłumaczenia oparta na API DeepL. Aktywowana przez konfigurację dostawcy.
  *
- * Włączane przez app.translation.provider=deepl. Bez klucza nie da się tego uruchomić i to
- * jest zamierzone - patrz konstruktor.
- *
- * CAŁA TRUDNOŚĆ TEJ KLASY SIEDZI W MAPOWANIU BŁĘDÓW, nie w wywołaniu HTTP. Worker musi
- * wiedzieć tylko jedno: czy ponawiać. Rozróżnienie robi się tutaj, bo tylko tutaj wiadomo,
+ * Zasadnicza część tej klasy to mapowanie błędów, a nie samo wywołanie HTTP. Wykonawca kolejki
+ * musi wiedzieć wyłącznie jedno: czy ponawiać. Rozróżnienie powstaje tutaj, bo tylko tutaj wiadomo,
  * co znaczą kody dostawcy:
  *
- *   429            - za dużo żądań naraz; minie samo               -> ponawiaj
- *   5xx            - awaria po stronie dostawcy; zwykle minie      -> ponawiaj
- *   timeout / IO   - sieć albo zawieszony serwer                   -> ponawiaj
- *   456            - wyczerpany limit znaków KONTA (nie użytkownika) -> NIE ponawiaj
- *   403            - nieprawidłowy klucz albo zły host (darmowy vs płatny) -> NIE ponawiaj
- *   400            - żądanie odrzucone (np. nieobsługiwany język)  -> NIE ponawiaj
+ *   429            - zbyt wiele żądań naraz, stan przejściowy            -> ponawiać
+ *   5xx            - awaria po stronie dostawcy, zwykle przejściowa      -> ponawiać
+ *   timeout, błąd sieci                                                  -> ponawiać
+ *   456            - wyczerpany limit znaków całego konta                -> nie ponawiać
+ *   401, 403       - nieprawidłowy klucz albo adres niepasujący do konta -> nie ponawiać
+ *   400            - żądanie odrzucone, np. nieobsługiwany język         -> nie ponawiać
  *
- * Trzy ostatnie wrócą identycznie za każdym razem, więc ponawianie ich to wyłącznie zwłoka.
- * Dwa z nich (456 i 403) to w dodatku sprawy dla CZŁOWIEKA, nie dla automatu - stąd log
- * na poziomie ERROR: cisza w tym miejscu oznacza usługę, która przestała działać dla
- * wszystkich, a wygląda jak brak ruchu.
+ * Trzy ostatnie przypadki dadzą identyczną odpowiedź przy każdym podejściu, więc ponawianie
+ * ich byłoby wyłącznie zwłoką przed wnioskiem znanym z pierwszej odpowiedzi. Dwa z nich
+ * wymagają reakcji człowieka, dlatego trafiają do logu na poziomie ERROR: cisza w tym miejscu
+ * oznaczałaby usługę, która przestała działać dla wszystkich, a wygląda jak brak ruchu.
  */
 @Slf4j
 @Component
 @ConditionalOnProperty(prefix = "app.translation", name = "provider", havingValue = "deepl")
 public class DeepLTranslationProvider implements TranslationProvider {
 
-    /** Wyczerpany limit znaków konta u dostawcy - kod niestandardowy, specyficzny dla DeepL. */
+    /** Wyczerpany limit znaków konta - kod niestandardowy, specyficzny dla DeepL. */
     private static final int QUOTA_EXCEEDED = 456;
 
     private final RestClient restClient;
@@ -58,17 +55,16 @@ public class DeepLTranslationProvider implements TranslationProvider {
         String apiKey = properties.deepl().apiKey();
 
         /*
-         * Sprawdzenie klucza siedzi TUTAJ, a nie w konfiguracji, bo tylko tutaj wiadomo, że
-         * dostawca został w ogóle wybrany - wymuszanie klucza na wszystkich uruchomieniach
-         * zablokowałoby profil testowy i deva na atrapie.
+         * Kontrola klucza znajduje się tutaj, a nie w konfiguracji, ponieważ tylko tutaj wiadomo,
+         * że ten dostawca został w ogóle wybrany. Wymuszanie klucza przy każdym uruchomieniu
+         * zablokowałoby profil testowy i pracę lokalną na atrapie.
          *
-         * Idiom "${DEEPL_API_KEY}" bez wartości domyślnej NIE zadziała jako fail-fast: binding
-         * @ConfigurationProperties idzie przez PropertySourcesPlaceholdersResolver z włączonym
-         * ignoreUnresolvablePlaceholders, więc nieustawiona zmienna wpisuje do pola literał
-         * "${DEEPL_API_KEY}" bez ostrzeżenia. Ta sama pułapka co przy AdminProperties.
+         * Sprawdzenie obejmuje też literał nierozwiązanego symbolu zastępczego: przy wiązaniu
+         * konfiguracji nieustawiona zmienna środowiskowa wpisuje do pola jego zapis tekstowy,
+         * bez żadnego ostrzeżenia, więc sama kontrola pustej wartości by go nie wychwyciła.
          *
-         * Komunikat NIE MOŻE zawierać wartości klucza - ten wyjątek ląduje w konsoli
-         * i w kolektorze logów.
+         * Komunikat nie zawiera wartości klucza - ten wyjątek trafia do konsoli i do kolektora
+         * logów.
          */
         if (apiKey == null || apiKey.isBlank() || apiKey.startsWith("${")) {
             throw new IllegalStateException(
@@ -87,9 +83,9 @@ public class DeepLTranslationProvider implements TranslationProvider {
             response = restClient.post()
                     .uri("/translate")
                     .contentType(MediaType.APPLICATION_JSON)
-                    // Tablica tekstów, bo tego oczekuje API - wysyłamy jeden element.
-                    // Dzielenie długich plików na części byłoby osobną decyzją; przy limicie
-                    // 256 KB na plik nie jest potrzebne.
+                    // Tablica tekstów, bo takiego kształtu oczekuje API; wysyłany jest jeden
+                    // element. Dzielenie długich plików na części byłoby osobną decyzją i przy
+                    // obowiązującym limicie rozmiaru pliku nie jest potrzebne.
                     .body(Map.of(
                             "text", List.of(text),
                             "target_lang", target.apiCode()))
@@ -100,7 +96,7 @@ public class DeepLTranslationProvider implements TranslationProvider {
                     .body(DeepLResponse.class);
 
         } catch (ResourceAccessException e) {
-            // Timeout połączenia albo odczytu, brak trasy do hosta - zawsze przejściowe.
+            // Timeout połączenia lub odczytu i brak trasy do hosta są zawsze przejściowe.
             throw new TranslationProviderException("TRANSLATION_PROVIDER_UNAVAILABLE", true,
                     "Dostawca tłumaczenia nie odpowiedział", e);
 
@@ -108,15 +104,15 @@ public class DeepLTranslationProvider implements TranslationProvider {
             throw e;
 
         } catch (RestClientException e) {
-            // Odpowiedź, której nie dało się przetworzyć. Traktujemy jak przejściową:
-            // dostawcy zdarza się oddać stronę błędu proxy zamiast JSON-a.
+            // Odpowiedź, której nie dało się przetworzyć, traktowana jest jako przejściowa:
+            // zdarza się, że zamiast danych wraca strona błędu wystawiona przez proxy.
             throw new TranslationProviderException("TRANSLATION_PROVIDER_UNAVAILABLE", true,
                     "Nieoczekiwana odpowiedź dostawcy tłumaczenia", e);
         }
 
         if (response == null || response.translations() == null || response.translations().isEmpty()) {
-            // Odpowiedź 200 bez tłumaczenia. Nie ponawiamy: to nie jest awaria, tylko rozjazd
-            // kontraktu, a kolejne identyczne żądanie da identyczny wynik.
+            // Odpowiedź poprawna, ale bez tłumaczenia. Nie ma czego ponawiać: to rozjazd kontraktu,
+            // a kolejne identyczne żądanie da identyczny wynik.
             throw new TranslationProviderException("TRANSLATION_PROVIDER_REJECTED", false,
                     "Dostawca zwrócił odpowiedź bez tłumaczenia");
         }
@@ -126,16 +122,16 @@ public class DeepLTranslationProvider implements TranslationProvider {
     }
 
     /* ---------------------------------------------------------------------------------
-     * Dokumenty: POST /v2/document (wgranie) -> POST /v2/document/{id} (status)
-     * -> POST /v2/document/{id}/result (pobranie). Wszystkie trzy metodą POST, tak jak
-     * opisuje dokumentacja DeepL - także sprawdzenie statusu, mimo że nic nie zmienia.
+     * Ścieżka dokumentowa: wgranie dokumentu, sprawdzenie stanu, pobranie wyniku. Wszystkie
+     * trzy wywołania używają metody POST, zgodnie z dokumentacją dostawcy - również sprawdzenie
+     * stanu, mimo że niczego nie zmienia.
      * --------------------------------------------------------------------------------- */
 
     @Override
     public DocumentHandle uploadDocument(byte[] content, String filename, TargetLanguage target) {
         MultiValueMap<String, Object> form = new LinkedMultiValueMap<>();
-        // Nazwa pliku jedzie w części multiparta, bo to PO NIEJ dostawca rozpoznaje format -
-        // bez niej odrzuca żądanie, nie wiedząc, czy dostał PDF-a, czy arkusz.
+        // Nazwa pliku trafia do części multiparta, ponieważ to po niej dostawca rozpoznaje format.
+        // Bez niej odrzuca żądanie, nie wiedząc, jaki dokument otrzymał.
         form.add("file", new NamedByteArrayResource(content, filename));
         form.add("target_lang", target.apiCode());
 
@@ -164,8 +160,9 @@ public class DeepLTranslationProvider implements TranslationProvider {
                 .body(Map.of("document_key", handle.documentKey()))
                 .retrieve()
                 .onStatus(HttpStatusCode::isError, (request, httpResponse) -> {
-                    // 404 przy sprawdzaniu statusu znaczy, że dokumentu już nie ma - został
-                    // pobrany albo wygasł. To nie jest awaria, tylko sygnał "zacznij od nowa".
+                    // Odpowiedź 404 przy sprawdzaniu stanu oznacza, że dokumentu już nie ma -
+                    // został pobrany albo wygasł. Nie jest to awaria, tylko sygnał do rozpoczęcia
+                    // od nowa, dlatego ma własny typ wyjątku.
                     if (httpResponse.getStatusCode().value() == 404) {
                         throw new DocumentUnavailableException("Dokument nie istnieje u dostawcy");
                     }
@@ -189,10 +186,10 @@ public class DeepLTranslationProvider implements TranslationProvider {
                 .retrieve()
                 .onStatus(HttpStatusCode::isError, (request, response) -> {
                     /*
-                     * 503 przy pobieraniu ma u DeepL DWA znaczenia naraz: "jeszcze się tłumaczy"
-                     * ORAZ "już pobrany, więc skasowany". Rozróżnić ich z samej odpowiedzi nie
-                     * sposób, ale wołający i tak schodzi tu dopiero po statusie DONE, więc
-                     * pierwsze znaczenie odpada - zostaje drugie. 404 to ten sam przypadek.
+                     * Kod 503 przy pobieraniu ma u tego dostawcy dwa znaczenia naraz: tłumaczenie
+                     * wciąż trwa albo dokument został już pobrany i skasowany. Z samej odpowiedzi
+                     * nie da się ich rozróżnić, ale wołający schodzi tutaj dopiero po stanie
+                     * zakończonym, więc pierwsze znaczenie odpada. Kod 404 oznacza to samo.
                      */
                     int code = response.getStatusCode().value();
                     if (code == 404 || code == 503) {
@@ -205,8 +202,9 @@ public class DeepLTranslationProvider implements TranslationProvider {
     }
 
     /**
-     * Wspólna obsługa awarii transportu dla wszystkich wywołań - identyczna jak w translate.
-     * Wydzielona, bo powtórzona cztery razy rozjechałaby się przy pierwszej poprawce.
+     * Wspólna obsługa awarii transportu dla wywołań dokumentowych, identyczna jak przy tłumaczeniu
+     * tekstu. Wydzielona, ponieważ powtórzona przy każdym wywołaniu rozjechałaby się przy pierwszej
+     * poprawce.
      */
     private <T> T call(Supplier<T> request) {
         try {
@@ -222,6 +220,7 @@ public class DeepLTranslationProvider implements TranslationProvider {
         }
     }
 
+    /** Zamienia kod odpowiedzi dostawcy na wyjątek z informacją, czy zlecenie wolno ponowić. */
     private TranslationProviderException mapError(HttpStatusCode status) {
         int code = status.value();
 
@@ -240,8 +239,8 @@ public class DeepLTranslationProvider implements TranslationProvider {
                     "Awaria po stronie dostawcy tłumaczenia (HTTP " + code + ")");
         }
         if (code == 401 || code == 403) {
-            // Bez treści odpowiedzi w komunikacie: przy błędzie uwierzytelnienia bywa w niej
-            // echo nagłówka, a tam siedzi klucz API.
+            // Bez treści odpowiedzi w komunikacie: przy błędzie uwierzytelnienia bywa w niej echo
+            // nagłówka, a w nim klucz API.
             log.error("Dostawca tłumaczenia odrzucił uwierzytelnienie (HTTP {}) - sprawdź klucz API "
                     + "oraz to, czy adres pasuje do rodzaju konta (darmowe vs płatne)", code);
             return new TranslationProviderException("TRANSLATION_PROVIDER_REJECTED", false,
@@ -252,27 +251,29 @@ public class DeepLTranslationProvider implements TranslationProvider {
     }
 
     /**
-     * Kształt odpowiedzi DeepL. Rekordy zamiast mapy, żeby rozjazd kontraktu wychodził przy
-     * deserializacji, a nie przy pierwszym get() zwracającym null.
+     * Kształt odpowiedzi na tłumaczenie tekstu. Rekordy zamiast mapy sprawiają, że rozjazd
+     * kontraktu ujawnia się przy deserializacji, a nie przy pierwszym odczycie zwracającym null.
      */
     record DeepLResponse(List<DeepLTranslation> translations) {
     }
 
     record DeepLTranslation(String detected_source_language, String text) {
 
-        /** Nazwa w JSON-ie jest z podkreśleniami; ta metoda daje czytelną nazwę w kodzie. */
+        /** Nazwy pól odpowiadają JSON-owi dostawcy; ta metoda daje czytelną nazwę w kodzie. */
         String detectedSourceLanguage() {
             return detected_source_language;
         }
     }
 
-    /** Odpowiedź na wgranie dokumentu. */
+    /** Odpowiedź na wgranie dokumentu - uchwyt potrzebny do dalszych wywołań. */
     record DocumentUpload(String document_id, String document_key) {
     }
 
     /**
-     * Odpowiedź na sprawdzenie statusu. seconds_remaining świadomie pomijamy: worker odpytuje
-     * w stałym rytmie i nie ma co zrobić z prognozą dostawcy poza wpisaniem jej do logu.
+     * Odpowiedź na sprawdzenie stanu dokumentu.
+     *
+     * Prognoza pozostałego czasu jest świadomie pomijana: wykonawca odpytuje w stałym rytmie
+     * i nie ma jak jej wykorzystać poza wpisaniem do logu.
      */
     record DocumentStatusResponse(String status, Integer billed_characters, String error_message) {
 
@@ -282,9 +283,9 @@ public class DeepLTranslationProvider implements TranslationProvider {
                 case "translating" -> DocumentStatus.State.TRANSLATING;
                 case "done" -> DocumentStatus.State.DONE;
                 case "error" -> DocumentStatus.State.ERROR;
-                // Nieznany status traktujemy jak błąd, a nie jak "jeszcze trwa": odpytywanie
-                // w nieskończoność o stan, którego nie rozumiemy, zamieniłoby rozjazd kontraktu
-                // w zlecenie wiszące na zawsze.
+                // Nieznany stan traktowany jest jak błąd, a nie jak "wciąż trwa": odpytywanie
+                // w nieskończoność o stan, którego aplikacja nie rozumie, zamieniłoby rozjazd
+                // kontraktu w zlecenie wiszące na zawsze.
                 default -> DocumentStatus.State.ERROR;
             };
             String message = state == DocumentStatus.State.ERROR && error_message == null
@@ -295,11 +296,11 @@ public class DeepLTranslationProvider implements TranslationProvider {
     }
 
     /**
-     * Zasób z JAWNĄ nazwą pliku.
+     * Zasób multipartowy z jawną nazwą pliku.
      *
-     * ByteArrayResource domyślnie nie ma nazwy, więc Spring buduje część multiparta bez
-     * filename - a DeepL rozpoznaje format właśnie po nim i odrzuca takie żądanie. Objaw jest
-     * mylący: błąd wygląda na problem z zawartością dokumentu, a nie z nagłówkiem części.
+     * Zwykły zasób bajtowy nazwy nie ma, więc część multiparta powstaje bez niej, a dostawca
+     * rozpoznaje format właśnie po nazwie i takie żądanie odrzuca. Objaw jest mylący: błąd
+     * wygląda na problem z zawartością dokumentu, a nie z nagłówkiem części.
      */
     static class NamedByteArrayResource extends ByteArrayResource {
 

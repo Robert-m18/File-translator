@@ -20,16 +20,13 @@ import java.util.Optional;
 
 
 /**
- * Operacje na kontach użytkowników.
+ * Operacje na kontach użytkowników - jedyne wejście do tabeli users.
  *
- * Nie ma tu CRUD-u administracyjnego w dawnym rozumieniu (edycja dowolnego pola, usuwanie).
- * Był, ale bez kontrolera nikt go nie wołał, a martwy kod obok kodu bezpieczeństwa jest
- * gorszy niż jego brak: nie wiadomo, czy przeszedł ten sam przegląd co reszta.
- *
- * Metody dla panelu administracyjnego (sekcja niżej) są tego przeciwieństwem: każda ma
- * wołającego w pakiecie admin/, własny endpoint i własny test regresyjny. Pakiet admin/
- * NIE sięga do UserRepository - tabela users należy do tego pakietu i całe wejście do niej
- * prowadzi tędy.
+ * Klasa nie udostępnia ogólnego CRUD-u (edycji dowolnego pola, kasowania bez kontroli).
+ * Każda metoda odpowiada konkretnemu przypadkowi użycia i ma wołającego w kodzie: pakiety
+ * auth/ i admin/ korzystają wyłącznie z tego serwisu, nie z repozytorium. Dzięki temu
+ * niezmienniki konta - kto nadaje rolę, kiedy konto staje się aktywne, co dzieje się
+ * z hasłem - są opisane w jednym miejscu, a nie rozproszone po wołających.
  */
 @Service
 @RequiredArgsConstructor
@@ -37,18 +34,18 @@ public class UserService {
 
     private final UserRepository userRepository;
 
-    /** Ile znaków mieści kolumna users.name - patrz changeset 0001. */
+    /** Pojemność kolumny users.name. */
     private static final int MAX_NAME_LENGTH = 50;
 
     /**
-     * Zakłada konto już potwierdzone, na podstawie zgłoszenia z poczekalni.
+     * Zakłada konto potwierdzone, na podstawie zgłoszenia z poczekalni rejestracyjnej.
      *
-     * Hasło przychodzi ZAHASHOWANE - BCrypt policzono już przy przyjęciu zgłoszenia,
-     * więc kodowanie go tutaj po raz drugi dałoby hash hasha i uniemożliwiło logowanie.
+     * Hasło przyjmowane jest już zahashowane, ponieważ BCrypt policzono przy przyjęciu
+     * zgłoszenia. Ponowne kodowanie dałoby hash hasha i uniemożliwiło logowanie.
      *
-     * Nie ma tu odpowiednika dawnego saveUser(dto) zakładającego konto z enabled=false.
-     * Taki wiersz jest teraz stanem niemożliwym: konto powstaje wyłącznie w chwili
-     * potwierdzenia adresu, a wcześniej dane leżą w pending_registrations.
+     * Nie istnieje odpowiednik zakładający konto nieaktywne: konto powstaje wyłącznie
+     * w chwili potwierdzenia adresu, a wcześniej dane czekają w pending_registrations.
+     * Wiersz z enabled = false jest w tej aplikacji stanem niemożliwym.
      */
     @Transactional
     public User createConfirmedUser(String email, String name, String passwordHash) {
@@ -62,16 +59,16 @@ public class UserService {
     }
 
     /**
-     * Zakłada konto administratora. Wołane wyłącznie z AdminBootstrap przy starcie.
+     * Zakłada konto administratora. Wołane wyłącznie przy starcie aplikacji.
      *
-     * Osobna metoda, a nie parametr Role w createConfirmedUser, i to jest tu cała decyzja:
-     * rola nigdy nie pochodzi z danych wejściowych, więc jedyna ścieżka nadająca ADMIN ma
-     * być widoczna po nazwie i nieosiągalna z przepływu rejestracji. Wspólna metoda
-     * z parametrem oznaczałaby, że wystarczy jedno błędne wywołanie w kontrolerze, żeby
-     * rejestracja zaczęła zakładać administratorów.
+     * Osobna metoda zamiast parametru Role w metodzie powyżej wynika z zasady, że rola nigdy
+     * nie pochodzi z danych wejściowych. Jedyna ścieżka nadająca uprawnienia administratora
+     * jest dzięki temu rozpoznawalna po nazwie i nieosiągalna z przepływu rejestracji;
+     * wspólna metoda z parametrem oznaczałaby, że jedno błędne wywołanie w kontrolerze
+     * pozwala rejestracji zakładać administratorów.
      *
-     * Hasło przychodzi ZAHASHOWANE, symetrycznie do createConfirmedUser - inaczej trzeba by
-     * pamiętać, która z dwóch sąsiadujących metod koduje, a która nie.
+     * Hasło przyjmowane jest zahashowane, symetrycznie do pozostałych metod zakładających
+     * konto - inaczej trzeba by pamiętać, która z sąsiadujących metod koduje, a która nie.
      */
     @Transactional
     public User createAdmin(String email, String name, String passwordHash) {
@@ -80,43 +77,40 @@ public class UserService {
         admin.setName(name);
         admin.setPassword(passwordHash);
         admin.setRole(Role.ADMIN);
-        // enabled = true od razu: konta technicznego nikt nie potwierdzi klikając w link,
-        // a wiersz z enabled = false jest w tej aplikacji stanem niemożliwym.
+        // Konto aktywne od razu: konta technicznego nikt nie potwierdzi klikając w link.
         admin.setEnabled(true);
         return userRepository.save(admin);
     }
 
     /**
-     * Odnajduje albo zakłada konto na podstawie potwierdzonej tożsamości z Google.
+     * Odnajduje lub zakłada konto na podstawie potwierdzonej tożsamości z Google.
      *
-     * TRZECIA metoda zakładająca konto, obok createConfirmedUser i createAdmin, i osobna
-     * z dokładnie tego samego powodu co tamte dwie: rola NIGDY nie pochodzi z danych
-     * wejściowych, więc każda ścieżka ją nadająca ma być widoczna po nazwie. Wspólna metoda
-     * z parametrem Role oznaczałaby, że jedno błędne wywołanie w obsłudze logowania Google
-     * wystarczy, żeby zewnętrzny dostawca tożsamości zaczął zakładać administratorów.
+     * Trzecia metoda zakładająca konto, osobna z tego samego powodu co dwie poprzednie: rola
+     * nie pochodzi z danych wejściowych, więc każda ścieżka ją nadająca ma być widoczna
+     * po nazwie. Wspólna metoda z parametrem Role oznaczałaby, że jedno błędne wywołanie
+     * w obsłudze logowania pozwala zewnętrznemu dostawcy tożsamości zakładać administratorów.
      *
-     * KOLEJNOŚĆ SZUKANIA JEST ISTOTNA - najpierw "sub", potem dopiero adres:
+     * Kolejność wyszukiwania jest istotna - najpierw identyfikator konta Google, potem adres:
      *
-     *  1. Po google_sub - konto już powiązane. Adres mógł się od tego czasu zmienić
-     *     u Google i to jest w porządku, bo tożsamością jest "sub".
-     *  2. Po adresie - konto istnieje, założone hasłem. DOPISUJEMY powiązanie i wpuszczamy.
-     *     To jest świadoma decyzja o łączeniu kont, nie efekt uboczny: Google z
-     *     email_verified = true dowodzi kontroli nad tą samą skrzynką, co kliknięcie w link
-     *     potwierdzający przy rejestracji. Nie ma tu NOWEGO zaufania - jest to samo zaufanie,
-     *     którym ta aplikacja już się posługuje. Warunek email_verified sprawdza wołający
+     *  1. Po identyfikatorze - konto jest już powiązane. Adres mógł się w międzyczasie
+     *     zmienić u dostawcy i nie ma to znaczenia, bo tożsamością jest identyfikator.
+     *  2. Po adresie - konto istnieje, założone hasłem; powiązanie zostaje dopisane. Jest to
+     *     świadoma decyzja o łączeniu kont: Google z potwierdzonym adresem dowodzi kontroli
+     *     nad tą samą skrzynką, co kliknięcie w link potwierdzający przy rejestracji, więc
+     *     nie pojawia się tu nowe zaufanie. Warunek potwierdzonego adresu sprawdza wołający
      *     i bez niego ta gałąź byłaby przejęciem konta, a nie połączeniem.
-     *  3. Brak konta - zakładamy je, od razu włączone.
+     *  3. Brak konta - zostaje założone, od razu aktywne.
      *
-     * enabled = true I ŻADNEGO MAILA POTWIERDZAJĄCEGO: adres właśnie został potwierdzony
-     * przez Google, więc wysłanie linku potwierdzającego adres byłoby prośbą o potwierdzenie
-     * potwierdzenia. Wiersz z enabled = false pozostaje stanem niemożliwym.
+     * Konto z Google nie dostaje maila potwierdzającego, ponieważ adres potwierdził już
+     * dostawca tożsamości.
      *
-     * Hasło przychodzi ZAHASHOWANE, symetrycznie do obu sąsiednich metod. Wołający podaje
-     * hash losowego, porzuconego sekretu - dlaczego akurat tak, zamiast NULL-a w kolumnie,
-     * wyjaśnia changeset 0014-users-google-account.xml.
+     * Hasło przyjmowane jest zahashowane, symetrycznie do pozostałych metod. Wołający podaje
+     * hash losowego, porzuconego sekretu, dzięki czemu kolumna hasła pozostaje niepusta,
+     * a logowanie hasłem na takie konto zwraca zwykły błąd poświadczeń.
      *
-     * @param email  adres JUŻ ZNORMALIZOWANY przez wołającego (nie przychodzi tu przez DTO,
-     *               więc kompaktowy konstruktor go nie tknął, a PostgreSQL rozróżnia wielkość liter)
+     * @param email adres już znormalizowany przez wołającego - nie przychodzi tu przez DTO,
+     *              więc normalizacja z kompaktowego konstruktora go nie objęła, a PostgreSQL
+     *              porównuje teksty z rozróżnianiem wielkości liter
      */
     @Transactional
     public User findOrCreateGoogleUser(String googleSub, String email, String name, String passwordHash) {
@@ -130,8 +124,8 @@ public class UserService {
             User existing = byEmail.get();
             existing.setGoogleSub(googleSub);
             return userRepository.save(existing);
-            // Nazwy CELOWO nie nadpisujemy nazwą z Google: konto jest już czyjeś, a użytkownik
-            // mógł ją u nas zmienić. Logowanie nie jest miejscem na cichą edycję cudzych danych.
+            // Nazwa nie jest nadpisywana nazwą z Google: konto należy już do kogoś, kto mógł
+            // ją zmienić. Logowanie nie jest miejscem na cichą edycję cudzych danych.
         }
 
         User user = new User();
@@ -145,21 +139,20 @@ public class UserService {
     }
 
     /**
-     * Nazwa do wyświetlania, przycięta do pojemności kolumny.
+     * Buduje nazwę do wyświetlania, przyciętą do pojemności kolumny.
      *
-     * users.name to VARCHAR(50) NOT NULL, a Google żadnego takiego limitu nie ma. Bez
-     * przycięcia dłuższe imię i nazwisko daje DataIntegrityViolationException, czyli 500
-     * W ŚRODKU PRZEKIEROWANIA Z GOOGLE - w miejscu, w którym użytkownik nie ma nawet czego
-     * ponowić, bo kod autoryzacyjny jest już zużyty.
+     * Kolumna ma ograniczoną długość, a dostawca tożsamości żadnego limitu nie stosuje. Bez
+     * przycięcia dłuższe imię i nazwisko kończyłoby się naruszeniem więzów, czyli błędem 500
+     * w środku przekierowania z Google - w miejscu, w którym użytkownik nie ma czego ponowić,
+     * bo kod autoryzacyjny jest już zużyty.
      *
-     * Puste imię (Google nie gwarantuje roszczenia "name") zastępuje część adresu przed @.
+     * Puste imię (dostawca nie gwarantuje tego roszczenia) zastępuje część adresu przed małpą.
      */
     private String displayName(String name, String email) {
         String candidate = name;
         if (candidate == null || candidate.isBlank()) {
-            // indexOf świadomie z zabezpieczeniem: adres bez @ nie powinien tu dotrzeć,
-            // ale substring(0, -1) rzuciłby wyjątek w środku przekierowania z Google,
-            // czyli zamienił brzydkie dane w awarię 500 na ścieżce logowania.
+            // Zabezpieczenie na adres bez małpy: taki nie powinien tu dotrzeć, ale wyjątek
+            // z substring zamieniłby brzydkie dane w awarię na ścieżce logowania.
             int at = email.indexOf('@');
             candidate = at > 0 ? email.substring(0, at) : email;
         }
@@ -180,12 +173,12 @@ public class UserService {
     }
 
     /**
-     * Konto po identyfikatorze konta Google.
+     * Zwraca konto po identyfikatorze konta Google.
      *
-     * Potrzebne przy wystawianiu tokenów po zalogowaniu przez Google, i to NIE jest
-     * to samo co wyszukanie po adresie z tokenu ID: konto mogło zostać powiązane dawniej,
-     * a adres u Google zmieniony później. Token musi nieść adres z NASZEGO wiersza, bo to
-     * po nim UserDetailsServiceImpl odnajduje użytkownika przy każdym kolejnym żądaniu.
+     * Potrzebne przy wystawianiu tokenów po zalogowaniu przez Google i nie jest tożsame
+     * z wyszukaniem po adresie z tokenu tożsamości: konto mogło zostać powiązane wcześniej,
+     * a adres u dostawcy zmieniony później. Token musi nieść adres z wiersza tej aplikacji,
+     * bo po nim odnajdywany jest użytkownik przy każdym kolejnym żądaniu.
      */
     @Transactional(readOnly = true)
     public Optional<User> findEntityByGoogleSub(String googleSub) {
@@ -193,7 +186,7 @@ public class UserService {
     }
 
     /**
-     * Podmienia hash hasła. Przyjmuje wartość już zakodowaną, bo kodowanie należy do
+     * Podmienia hash hasła. Przyjmuje wartość już zakodowaną, ponieważ kodowanie należy do
      * tego, kto zna hasło jawne - tutaj trafia wyłącznie gotowy hash.
      */
     @Transactional
@@ -226,8 +219,10 @@ public class UserService {
     }
 
     /**
-     * @return true, jeśli blokada faktycznie została nałożona; false, jeśli konto było
-     *         już zablokowane (operacja idempotentna - patrz UserRepository.blockAccount)
+     * Nakłada blokadę administracyjną.
+     *
+     * @return true, jeśli blokada została nałożona; false, jeśli konto było już zablokowane -
+     *         operacja jest idempotentna, żeby nie nadpisywać śladu audytowego
      */
     @Transactional
     public boolean blockAccount(Long id, Instant now, String reason) {
@@ -239,7 +234,7 @@ public class UserService {
         userRepository.unblockAccount(id);
     }
 
-    /** Zdejmuje blokadę po nieudanych logowaniach. NIE rusza blokady administracyjnej. */
+    /** Zdejmuje blokadę po nieudanych logowaniach. Nie rusza blokady administracyjnej. */
     @Transactional
     public void clearLoginLock(Long id) {
         userRepository.clearLoginLock(id);
@@ -249,10 +244,10 @@ public class UserService {
      * Kasuje konto razem z sesjami, tokenami resetu i zleceniami tłumaczenia (kaskada
      * po stronie bazy - patrz UserRepository.deleteAccount).
      *
-     * Musi być wołane w transakcji wołającego, i to nie jest ozdoba: decyzja "czy wolno
-     * skasować" zapada w AdminUserService pod blokadą wierszy administratorów, a blokada
-     * trzyma tylko do końca transakcji, w której ją założono. Osobna transakcja tutaj
-     * znaczyłaby, że kontrola i kasowanie odbywają się w dwóch różnych stanach bazy.
+     * Wymaga transakcji wołającego: decyzja o dopuszczalności kasowania zapada
+     * w AdminUserService pod blokadą wierszy administratorów, a blokada obowiązuje tylko do
+     * końca transakcji, w której ją założono. Osobna transakcja tutaj oznaczałaby, że kontrola
+     * i kasowanie odbywają się w dwóch różnych stanach bazy.
      *
      * @return true, jeśli konto istniało i zostało skasowane
      */
@@ -262,8 +257,8 @@ public class UserService {
     }
 
     /**
-     * Identyfikatory niezablokowanych administratorów, z blokadą wierszy na czas transakcji.
-     * Musi być wołane w transakcji wołającego - inaczej blokada spada, zanim zapadnie
+     * Zwraca identyfikatory niezablokowanych administratorów, blokując ich wiersze na czas
+     * transakcji. Wymaga transakcji wołającego - inaczej blokada zwalnia się, zanim zapadnie
      * decyzja, której miała pilnować.
      */
     @Transactional
@@ -274,17 +269,15 @@ public class UserService {
     /**
      * Zamienia fragment adresu wpisany przez administratora we wzorzec LIKE.
      *
-     * Dwie rzeczy, obie konieczne:
+     * Wykonuje dwie rzeczy, obie konieczne. Normalizacja sprawia, że zapytania różniące się
+     * wielkością liter i białymi znakami szukają tego samego; po stronie kolumny odpowiada jej
+     * funkcja lower() w zapytaniu. Escapowanie metaznaków zapobiega sytuacji, w której wpisanie
+     * procentu zwraca całą bazę, a podkreślnik pasuje do dowolnego znaku - filtr przestawałby
+     * wtedy filtrować w sposób niewidoczny dla administratora.
      *
-     * 1. NORMALIZACJA (EmailNormalizer) - żeby "Kowalski" i " kowalski " szukały tego samego.
-     *    Po stronie kolumny odpowiada jej lower(u.email) w zapytaniu.
-     * 2. ESCAPOWANIE metaznaków - bez niego wpisanie "%" zwraca całą bazę, a "_" pasuje do
-     *    dowolnego znaku. Filtr przestawałby wtedy filtrować po CICHU, czyli w sposób,
-     *    którego administrator nie ma jak zauważyć. Regresja:
-     *    AdminPanelTest.search_shouldTreatWildcardsLiterally.
-     *
-     * Puste zapytanie daje wzorzec "%", więc lista bez filtra i lista z filtrem to jedno
-     * zapytanie - nie ma tu dynamicznie sklejanego SQL-a ani dwóch ścieżek do rozjechania.
+     * Puste zapytanie daje wzorzec pasujący do wszystkiego, dzięki czemu lista z filtrem
+     * i bez filtra to jedno zapytanie, bez dynamicznie sklejanego SQL-a i bez dwóch ścieżek,
+     * które mogłyby się rozjechać.
      */
     private static String likePattern(String query) {
         String normalized = EmailNormalizer.normalize(query);
@@ -294,8 +287,8 @@ public class UserService {
 
         StringBuilder pattern = new StringBuilder(normalized.length() + 8).append('%');
         for (char c : normalized.toCharArray()) {
-            // Sam znak ucieczki też trzeba uciec - inaczej adres z wykrzyknikiem
-            // szukałby czegoś innego, niż wpisano.
+            // Sam znak ucieczki również wymaga poprzedzenia - inaczej adres zawierający
+            // wykrzyknik szukałby czegoś innego, niż wpisano.
             if (c == '%' || c == '_' || c == LIKE_ESCAPE) {
                 pattern.append(LIKE_ESCAPE);
             }
