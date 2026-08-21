@@ -261,6 +261,28 @@ public class TranslationService {
         log.info("Usunięto zlecenie tłumaczenia razem z plikami (id={})", jobId);
     }
 
+    /**
+     * Kasuje WSZYSTKIE pliki użytkownika. Wołane przy usuwaniu konta z panelu.
+     *
+     * KASUJE PLIKI, NIE WIERSZE - i nazwa mówi dokładnie tyle, ile ta metoda robi. Wiersze
+     * translation_jobs znikają razem z wierszem users, bo klucz obcy ma ON DELETE CASCADE
+     * (changeset 0007), czyli w JEDNEJ transakcji z usunięciem konta. Powtórzenie tego
+     * kasowania tutaj byłoby zapytaniem, które zawsze trafia w zero wierszy, a wyglądałoby
+     * jak druga - i jedyna - ścieżka usuwania.
+     *
+     * Magazyn obiektów nie ma z tą transakcją nic wspólnego i to jest jedyny powód, dla
+     * którego ta metoda w ogóle istnieje: bajty trzeba usunąć osobnym wywołaniem po sieci.
+     *
+     * WOŁAĆ PO ZATWIERDZENIU USUNIĘCIA KONTA, nigdy przed. Ten sam niezmiennik co przy
+     * deleteOwn: stanem pośrednim, który może zostać po awarii, jest PLIK BEZ WIERSZA -
+     * miejsce, które sprząta reguła wygasania na kubełku. Odwrotna kolejność zostawiłaby
+     * przy nieudanym usunięciu konto z widocznymi zleceniami, których treści już nie ma.
+     */
+    public void deleteAllFilesOf(Long userId) {
+        objectStore.deletePrefix(ObjectKeys.userPrefix(userId));
+        log.info("Usunięto pliki użytkownika z magazynu (userId={})", userId);
+    }
+
     private TranslationJobResponse toResponse(TranslationJob job) {
         return new TranslationJobResponse(
                 job.getId(),

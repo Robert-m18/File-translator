@@ -12,7 +12,9 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -22,7 +24,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * Panel administracyjny: przegląd kont i cztery akcje na nich.
+ * Panel administracyjny: przegląd kont i pięć akcji na nich.
  *
  * ŚCIEŻKA TO /users, A NIE /admin/users, i to nie jest kwestia gustu. SecurityConfig ma
  * regułę .requestMatchers("/users/**").hasRole("ADMIN") stojącą tam od czasu usunięcia
@@ -31,10 +33,8 @@ import org.springframework.web.bind.annotation.RestController;
  * jego dodania panel wpadłby pod anyRequest().authenticated(), czyli stanąłby otworem dla
  * KAŻDEGO zalogowanego. Regresja: AdminPanelTest.regularUser_shouldGet403OnUserEndpoints.
  *
- * Akcje są POST-ami, więc wymagają nagłówka CSRF jak każda operacja zmieniająca stan.
- * Nie ma DELETE - kasowanie konta pociąga kaskady w refresh_tokens, password_reset_tokens
- * i translation_jobs (razem z plikami użytkownika) i zasługuje na własny projekt, a nie
- * na dopisek do panelu.
+ * Akcje są POST-ami (i jednym DELETE), więc wymagają nagłówka CSRF jak każda operacja
+ * zmieniająca stan.
  *
  * Kontroler jest wyłącznie warstwą HTTP. Mapowanie wyjątków na kody stanu siedzi
  * w GlobalExceptionHandler.
@@ -92,6 +92,25 @@ public class AdminUserController {
     public AdminUserView forceLogout(@PathVariable Long id,
                                      @AuthenticationPrincipal User admin) {
         return adminUserService.forceLogout(id, admin.getId());
+    }
+
+    /**
+     * Kasuje konto razem z sesjami, tokenami, zleceniami tłumaczenia i plikami. Nieodwracalne.
+     *
+     * DELETE, a nie POST /{id}/delete jak pozostałe akcje: tamte zmieniają stan konta i mają
+     * co zwrócić - ten sam AdminUserView, którym front podmienia wiersz. Tutaj po operacji
+     * nie ma już czego pokazać, więc jedyną uczciwą odpowiedzią jest 204 bez ciała, a metodą
+     * ta, która to znaczy. Front usuwa wiersz z listy zamiast go podmieniać.
+     *
+     * Pytanie "czy na pewno" należy do interfejsu, nie do API - drugi endpoint potwierdzający
+     * byłby stanem do wygaszania i tak samo dałby się pominąć przez curl. Nieodwracalność
+     * pilnują kontrole w AdminUserService, które działają niezależnie od tego, kto woła.
+     */
+    @DeleteMapping("/{id}")
+    public ResponseEntity<Void> delete(@PathVariable Long id,
+                                       @AuthenticationPrincipal User admin) {
+        adminUserService.delete(id, admin.getId());
+        return ResponseEntity.noContent().build();
     }
 
     private Pageable capped(Pageable pageable) {

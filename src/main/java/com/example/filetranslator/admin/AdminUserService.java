@@ -7,15 +7,17 @@ package com.example.filetranslator.admin;
 import com.example.filetranslator.admin.exception.AdminActionRejectedException;
 import com.example.filetranslator.admin.exception.AdminUserNotFoundException;
 import com.example.filetranslator.auth.RefreshTokenService;
+import com.example.filetranslator.translation.TranslationService;
 import com.example.filetranslator.user.UserService;
 import com.example.filetranslator.user.dto.AdminUserView;
 import com.example.filetranslator.user.model.Role;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
 import java.util.List;
@@ -41,11 +43,36 @@ import java.util.List;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class AdminUserService {
 
     private final UserService userService;
     private final RefreshTokenService refreshTokenService;
+
+    /**
+     * Kasowanie plików usuwanego konta. To JEDYNE miejsce, w którym admin/ sięga do
+     * translation/ - i sięga po port, a nie po repozytorium tamtego pakietu, tak samo jak
+     * po auth/ sięga przez RefreshTokenService. Strzałki zostają acykliczne:
+     * admin -> translation -> user.
+     */
+    private final TranslationService translationService;
+
+    /**
+     * Transakcja wołana programowo, wyłącznie na potrzeby kasowania konta: kasowanie plików
+     * MUSI zostać poza nią (to wywołanie po sieci), a decyzja o kasowaniu MUSI być w środku,
+     * bo trzyma ją blokada wierszy. @Transactional na metodzie tej klasy nie dałby rady
+     * rozdzielić jednego od drugiego, a wołanie własnej metody i tak omija proxy Springa.
+     */
+    private final TransactionTemplate transaction;
+
+    public AdminUserService(UserService userService,
+                            RefreshTokenService refreshTokenService,
+                            TranslationService translationService,
+                            PlatformTransactionManager transactionManager) {
+        this.userService = userService;
+        this.refreshTokenService = refreshTokenService;
+        this.translationService = translationService;
+        this.transaction = new TransactionTemplate(transactionManager);
+    }
 
     @Transactional(readOnly = true)
     public Page<AdminUserView> list(String query, Pageable pageable) {
@@ -162,5 +189,82 @@ public class AdminUserService {
         log.info("Wymuszono wylogowanie (id={}, przez id={}, unieważniono {} token(ów))",
                 targetId, adminId, revoked);
         return get(targetId);
+    }
+
+    /**
+     * Kasuje konto razem z sesjami, tokenami resetu, zleceniami tłumaczenia i plikami.
+     * NIEODWRACALNIE - nie ma tu kosza ani kolumny "usunięte".
+     *
+     * DLACZEGO KASOWANIE, SKORO JEST BLOKADA: blokada odcina dostęp, ale zostawia wszystko
+     * na miejscu - adres, imię, hash hasła i pliki. Prawo do usunięcia danych trzeba było
+     * dotąd realizować ręcznym UPDATE'em w bazie, czyli operacją bez śladu i bez kontroli,
+     * kto ją wykonał. Blokada zostaje osobną akcją, bo odpowiada na inne pytanie
+     * ("odciąć dostęp") niż kasowanie ("usunąć dane").
+     *
+     * KOLEJNOŚĆ KONTROLI JEST ODWROTNA NIŻ PRZY BLOKADZIE i to nie jest niekonsekwencja.
+     * Tam "ostatni administrator" idzie pierwszy, bo blokada SIEBIE bywa dopuszczalna
+     * (gdy administratorów jest dwóch) i chodziło o trafniejszy komunikat. Tutaj skasowanie
+     * siebie jest odrzucane ZAWSZE, więc komunikat o ostatnim administratorze byłby
+     * nieprawdą sugerującą, że przy drugim administratorze operacja by przeszła.
+     *
+     * KONTROLA OSTATNIEGO ADMINISTRATORA WYGLĄDA NA MARTWĄ I NIĄ NIE JEST. Sekwencyjnie
+     * faktycznie nie ma jak jej odpalić: wołający jest niezablokowanym administratorem,
+     * więc gdy celem jest ktoś inny, niezablokowani są co najmniej dwaj. Odpala się dopiero
+     * WSPÓŁBIEŻNIE - dwóch administratorów kasujących się nawzajem w tej samej chwili
+     * przeszłoby obie kontrole "nie kasuję siebie" i zostałoby zero administratorów, czyli
+     * stan, z którego aplikacja sama nie wstanie (AdminBootstrap z założenia nie promuje
+     * istniejącego konta USER). Blokada wierszy w lockUnblockedAdminIds ustawia takich
+     * dwóch w kolejkę: drugi widzi wynik pierwszego i dostaje odmowę.
+     *
+     * Sesji nie unieważniamy osobno - wiersze refresh_tokens znikają z kaskadą klucza
+     * obcego. Żywy token DOSTĘPOWY przestaje działać przy najbliższym żądaniu, bo
+     * UserDetailsServiceImpl nie odnajdzie już konta; to jedyne miejsce obok blokady,
+     * w którym 15-minutowe okno tokenu bezstanowego jest domknięte.
+     */
+    public void delete(Long targetId, Long adminId) {
+        transaction.executeWithoutResult(status -> {
+            AdminUserView target = get(targetId);
+
+            if (targetId.equals(adminId)) {
+                throw new AdminActionRejectedException("CANNOT_DELETE_SELF",
+                        "Nie można usunąć własnego konta");
+            }
+
+            if (target.role() == Role.ADMIN) {
+                List<Long> unblockedAdmins = userService.lockUnblockedAdminIds();
+                if (unblockedAdmins.contains(targetId) && unblockedAdmins.size() <= 1) {
+                    throw new AdminActionRejectedException("LAST_ADMIN_CANNOT_BE_DELETED",
+                            "To jedyne niezablokowane konto administratora - jego usunięcie "
+                                    + "odcięłoby dostęp do panelu wszystkim");
+                }
+            }
+
+            if (!userService.deleteAccount(targetId)) {
+                // Zniknęło między odczytem a kasowaniem - dla wołającego to ten sam
+                // przypadek co "nie ma takiego konta".
+                throw new AdminUserNotFoundException();
+            }
+        });
+
+        /*
+         * Po zatwierdzeniu, nie w transakcji. Dwa powody, oba już w tym projekcie zapadły:
+         * wywołanie po sieci nie ma prawa trzymać połączenia z pulą, a gdyby transakcja
+         * wycofała się po skasowaniu plików, zostałoby konto ze zleceniami bez treści.
+         *
+         * AWARIA MAGAZYNU NIE PRZEWRACA CAŁEJ OPERACJI. Konto jest już skasowane i cofnąć
+         * się nie da, więc wyjątek puszczony dalej dałby administratorowi 500 po UDANYM
+         * usunięciu - a ponowienie odpowiedziałoby wtedy 404. Zamiast tego zostaje WARN
+         * z identyfikatorem: pliki są już nieosiągalne (nie ma wiersza, który by je
+         * wskazywał) i wygaszą się przez regułę na kubełku, tak samo jak osierocone przez
+         * retencję. To ta sama decyzja co w TranslationCleanupJob.
+         */
+        try {
+            translationService.deleteAllFilesOf(targetId);
+        } catch (RuntimeException e) {
+            log.warn("Konto usunięte, ale nie udało się skasować jego plików (id={}): {}",
+                    targetId, e.toString());
+        }
+
+        log.info("Usunięto konto razem z danymi (id={}, przez id={})", targetId, adminId);
     }
 }
