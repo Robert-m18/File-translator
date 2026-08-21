@@ -1,6 +1,11 @@
 # File Translator API
 
-Backend REST API w Spring Boot 4 / Java 21 — usługa tłumaczenia plików (`.txt`, PDF, XLSX)
+[![CI](https://github.com/Robert-m18/File-translator/actions/workflows/ci.yml/badge.svg)](https://github.com/Robert-m18/File-translator/actions/workflows/ci.yml)
+[![Java](https://img.shields.io/badge/Java-21-orange)](https://openjdk.org/projects/jdk/21/)
+[![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.0.6-brightgreen)](https://spring.io/projects/spring-boot)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17-blue)](https://www.postgresql.org/)
+
+Backend REST API w Spring Boot 4 / Java 21 — usługa tłumaczenia plików (`.txt`, PDF, DOCX, XLSX)
 z kompletnym uwierzytelnianiem i panelem administracyjnym.
 
 - **Tłumaczenie** — upload, kolejka zadań w bazie, worker w tle, deduplikacja po odcisku treści,
@@ -8,13 +13,53 @@ z kompletnym uwierzytelnianiem i panelem administracyjnym.
 - **Uwierzytelnianie** — rejestracja z potwierdzeniem adresu, logowanie na ciasteczkach `httpOnly`,
   logowanie kontem Google (OAuth2/OIDC), rotacja tokenów odświeżających z wykrywaniem kradzieży,
   blokada konta, reset hasła.
-- **Panel administracyjny** — lista i wyszukiwanie kont, blokowanie z powodem, wymuszone
-  wylogowanie.
+- **Panel administracyjny** — lista i wyszukiwanie kont, blokowanie z powodem, zdejmowanie blokady
+  logowania, wymuszone wylogowanie, usunięcie konta razem z jego plikami.
 
 Interfejs (React + Vite) jest osobnym repozytorium:
 **[File_translator_frontend_REACT](https://github.com/Robert-m18/File_translator_frontend_REACT)**.
 
 > Nazwa artefaktu Mavena (`file_translator`) została z pierwotnego szkieletu projektu.
+
+---
+
+## Demo
+
+**Aplikacja działa pod adresem: https://file-translator-frontend-react.rmoczygeba11.workers.dev**
+
+Konto testowe, żeby nie zakładać własnego:
+
+| | |
+|---|---|
+| Login | `rmoczygeba11+demo@gmail.com` |
+| Hasło | `DemoFileTranslator1` |
+
+> **Pierwsze wejście może potrwać do ~3 minut.** Backend stoi na darmowej instancji Rendera,
+> która usypia po okresie bezczynności i budzi się dopiero przy pierwszym żądaniu. Objawem jest
+> komunikat o błędzie serwera przy logowaniu — wystarczy odczekać i spróbować ponownie.
+> Kolejne żądania są już natychmiastowe.
+
+| Usługa | Gdzie stoi |
+|---|---|
+| Frontend | Cloudflare Workers |
+| Backend | Render (plan darmowy, Wirginia) |
+| Baza | Neon (PostgreSQL, AWS US East) |
+| Pliki | Backblaze B2 (S3-compatible, EU Central) |
+| Poczta | Brevo (SMTP) |
+
+---
+
+## Zrzuty ekranu
+
+| Logowanie | Pulpit |
+|---|---|
+| ![Ekran logowania](docs/screenshots/01-logowanie.png) | ![Pulpit użytkownika](docs/screenshots/02-pulpit.png) |
+| Logowanie hasłem albo kontem Google. | Dane sesji z `GET /auth/me` — jedynego źródła prawdy o zalogowaniu. |
+
+| Tłumaczenie plików | Polityka prywatności |
+|---|---|
+| ![Ekran tłumaczeń](docs/screenshots/03-tlumaczenia.png) | ![Polityka prywatności](docs/screenshots/04-polityka-prywatnosci.png) |
+| Upload, wybór języka i lista własnych zleceń z ich statusem. | Konkretne terminy retencji i lista podprzetwarzających. |
 
 ---
 
@@ -113,7 +158,8 @@ com.example.filetranslator
 │   ├── dto/  model/  repository/  oauth2/     (oauth2/ = logowanie kontem Google)
 ├── user/            konto użytkownika, encja User (auth zależy od user, nigdy odwrotnie)
 │   ├── dto/  model/
-├── admin/           panel: lista i wyszukiwanie kont, blokada, wymuszone wylogowanie
+├── admin/           panel: lista i wyszukiwanie kont, blokada, wymuszone wylogowanie,
+│                   usunięcie konta razem z plikami
 │   ├── dto/  exception/
 ├── translation/     tłumaczenie: upload, kolejka, worker, dostawca, magazyn obiektowy
 │   ├── dto/  model/  repository/  exception/  provider/  storage/
@@ -357,7 +403,7 @@ Każdy błąd to `application/problem+json`:
 | POST | `/auth/reset-password` | token z maila | Ustawia nowe hasło, unieważnia wszystkie sesje |
 | GET | `/oauth2/authorization/google` | publiczny | Start logowania kontem Google (nawigacja przeglądarki, **nie** `fetch`) |
 | GET | `/login/oauth2/code/google` | publiczny | Adres powrotny od Google — wystawia te same ciasteczka co `/auth/login` |
-| POST | `/translations` | **zalogowany** | Zlecenie tłumaczenia (`.txt`, PDF, XLSX; `multipart/form-data`) — `202` z identyfikatorem |
+| POST | `/translations` | **zalogowany** | Zlecenie tłumaczenia (`.txt`, PDF, DOCX, XLSX; `multipart/form-data`) — `202` z identyfikatorem |
 | GET | `/translations` | **zalogowany** | Lista **własnych** zleceń, stronicowana, bez treści plików |
 | GET | `/translations/{id}` | **właściciel** | Status zlecenia |
 | GET | `/translations/{id}/content` | **właściciel** | Przetłumaczony plik (`Content-Disposition: attachment`) |
@@ -368,6 +414,7 @@ Każdy błąd to `application/problem+json`:
 | POST | `/users/{id}/unblock` | `ROLE_ADMIN` | Zdjęcie blokady |
 | POST | `/users/{id}/unlock` | `ROLE_ADMIN` | Wyzerowanie licznika nieudanych logowań |
 | POST | `/users/{id}/logout` | `ROLE_ADMIN` | Wymuszone wylogowanie ze wszystkich urządzeń |
+| DELETE | `/users/{id}` | `ROLE_ADMIN` | Usuwa konto razem z sesjami, zleceniami i plikami — **nieodwracalne** |
 | GET | `/actuator/health`, `/actuator/info` | publiczny | Health check i probe'y dla orkiestratora |
 | GET | `/actuator/metrics`, `/actuator/prometheus` | `ROLE_ADMIN` | Metryki |
 
@@ -468,15 +515,48 @@ uzasadnienie i warunki zmiany w `CLAUDE.md`, sekcja *Accepted trade-offs*.
 | `prod` | z `DATABASE_*` | wyłącznie ze zmiennych środowiskowych | wyłączony |
 | `test` | PostgreSQL w kontenerze (`-Ph2`: H2 w pamięci) | w pliku testowym | — |
 
-Zmienne środowiskowe dla `prod`: `DATABASE_URL`, `DATABASE_USER`, `DATABASE_PASSWORD`,
-`JWT_SECRET`, `FRONTEND_URL`, `MAIL_HOST`, `MAIL_USERNAME`, `MAIL_PASSWORD`, `MAIL_FROM`,
-`STORAGE_BUCKET`, `STORAGE_ACCESS_KEY`, `STORAGE_SECRET_KEY`, `DEEPL_API_KEY`.
+### Zmienne środowiskowe
 
-`GOOGLE_CLIENT_ID` i `GOOGLE_CLIENT_SECRET` są **opcjonalne** na każdym profilu — bez nich
-logowanie kontem Google jest wyłączone (z ostrzeżeniem `WARN` przy starcie), a reszta
-uwierzytelniania działa bez zmian.
-Opcjonalnie: `STORAGE_ENDPOINT` (puste = prawdziwe AWS; MinIO i Cloudflare R2 wymagają adresu),
-`STORAGE_REGION`, `SERVER_PORT`, `MAIL_PORT`, `DB_POOL_SIZE`.
+Kolumna „wymagana" dotyczy profilu `prod` — na `dev` wszystko ma wartości domyślne celujące
+w usługi z `docker-compose.yml`, więc lokalnie nie trzeba ustawiać niczego.
+
+| Zmienna | Wymagana | Domyślnie | Do czego |
+|---|---|---|---|
+| `SPRING_PROFILES_ACTIVE` | **tak** | `dev` | Bez niej wdrożenie startuje na profilu `dev` i szuka bazy na `localhost:5433` |
+| `DATABASE_URL` | **tak** | `jdbc:postgresql://localhost:5433/userapitest` | Adres JDBC bazy |
+| `DATABASE_USER` | **tak** | `postgres` | Użytkownik bazy |
+| `DATABASE_PASSWORD` | **tak** | `postgres` | Hasło do bazy |
+| `DB_POOL_SIZE` | nie | `10` | Rozmiar puli połączeń — patrz uwaga niżej |
+| `JWT_SECRET` | **tak** | wartość deweloperska | Klucz podpisu JWT, **base64**, min. 256 bitów |
+| `FRONTEND_URL` | **tak** | `http://localhost:5173` | Origin dla CORS i podstawa linków w mailach |
+| `SERVER_PORT` | nie | `2009` | Port HTTP |
+| `MAIL_HOST` | **tak** | `localhost` | Serwer SMTP |
+| `MAIL_PORT` | nie | `1025` | Port SMTP |
+| `MAIL_USERNAME` | **tak** | — | Login SMTP |
+| `MAIL_PASSWORD` | **tak** | — | Hasło SMTP |
+| `MAIL_FROM` | **tak** | brak na `prod` | Adres nadawcy — **to nie to samo co login SMTP** |
+| `MAIL_SMTP_AUTH`, `MAIL_SMTP_STARTTLS` | nie | `false` / `false` | Lokalny serwer testowy nie wymaga ani jednego, ani drugiego |
+| `STORAGE_TYPE` | — | `memory` (na `prod` przypięte `s3`) | Rodzaj magazynu plików |
+| `STORAGE_BUCKET` | **tak** | — | Nazwa kubełka |
+| `STORAGE_ACCESS_KEY` | **tak** | — | Klucz dostępu do magazynu |
+| `STORAGE_SECRET_KEY` | **tak** | — | Sekret magazynu |
+| `STORAGE_ENDPOINT` | zależnie | puste | Puste = prawdziwe AWS; MinIO, Backblaze B2 i R2 wymagają adresu |
+| `STORAGE_REGION` | nie | `us-east-1` | Wymagany przez SDK do podpisu żądań, nawet gdy usłudze jest obojętny |
+| `TRANSLATION_PROVIDER` | — | `echo` (na `prod` przypięte `deepl`) | Atrapa albo prawdziwy dostawca |
+| `DEEPL_API_KEY` | **tak** | — | Klucz DeepL; brak zatrzymuje start, gdy wybrany jest ten dostawca |
+| `DEEPL_API_URL` | nie | `https://api-free.deepl.com/v2` | Konta darmowe mają **inny host** niż płatne |
+| `RATE_LIMIT_STORE` | nie | `memory` | `redis` przy więcej niż jednej instancji |
+| `RATE_LIMIT_REDIS_URL` | zależnie | `redis://localhost:6379` | Wymagana przy `RATE_LIMIT_STORE=redis` |
+| `COOKIE_SECURE`, `COOKIE_SAME_SITE` | nie | `false` / `Strict` (na `prod` `true` / `None`) | Ciasteczka sesji |
+| `ADMIN_ENABLED`, `ADMIN_EMAIL`, `ADMIN_PASSWORD` | nie | wyłączone | Konto administratora zakładane przy starcie |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | **tak** | puste | Klient OAuth2 — patrz ostrzeżenie niżej |
+
+> **Uwaga do `GOOGLE_CLIENT_ID`.** Wbrew temu, co sugeruje pusta wartość domyślna, **aplikacja
+> bez tej zmiennej nie wstaje**. Spring Boot traktuje pusty identyfikator klienta nie jako brak
+> rejestracji, lecz jako rejestrację nieprawidłową, i przerywa start kontekstu komunikatem
+> `Client id of registration 'google' must not be empty`. Do czasu scalenia poprawki z gałęzi
+> `google-oauth2` obie zmienne trzeba ustawić także wtedy, gdy logowanie kontem Google nie jest
+> potrzebne (wystarczy dowolna niepusta wartość, żeby uruchomić resztę aplikacji).
 
 Magazyn plików i dostawca tłumaczenia są na `prod` **przypięte na sztywno** (`app.storage.type=s3`,
 `app.translation.provider=deepl`) i nie da się ich przestawić zmienną. W profilu bazowym mają
