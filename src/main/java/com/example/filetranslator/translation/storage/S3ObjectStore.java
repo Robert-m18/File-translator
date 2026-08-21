@@ -27,17 +27,17 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Magazyn zgodny z S3: MinIO lokalnie, AWS S3 na produkcji.
+ * Magazyn zgodny z protokołem S3: MinIO w środowisku lokalnym, usługa chmurowa na produkcji.
  *
- * JEDNA IMPLEMENTACJA NA OBA, bo MinIO mówi tym samym protokołem - różnicę robi wyłącznie
- * endpoint i styl adresowania kubełka, oba ustawiane przy budowie klienta (S3ClientConfig).
- * Dzięki temu ścieżka wykonywana lokalnie jest DOKŁADNIE tą, która pojedzie na produkcję,
- * a nie jej podobną.
+ * Jedna implementacja obsługuje oba przypadki, ponieważ MinIO mówi tym samym protokołem -
+ * różnicę stanowi wyłącznie adres punktu końcowego i styl adresowania kubełka, ustawiane przy
+ * budowie klienta. Dzięki temu ścieżka wykonywana lokalnie jest dokładnie tą, która pojedzie na
+ * produkcję, a nie jej odpowiednikiem.
  *
- * Wyjątki SDK są tłumaczone na dwa nasze typy i to rozróżnienie jest celowe: brak obiektu
- * to stan do pokazania użytkownikowi (ObjectMissingException), wszystko inne to awaria
- * infrastruktury (ObjectStoreException). Zlanie ich w jeden dawałoby 500 tam, gdzie należy
- * się czytelne "pliku już nie ma".
+ * Wyjątki biblioteki klienckiej tłumaczone są na dwa typy tego pakietu i rozróżnienie jest celowe:
+ * brak obiektu to stan do pokazania użytkownikowi, a wszystko inne to awaria infrastruktury.
+ * Zlanie ich w jeden dawałoby błąd serwera tam, gdzie należy się czytelna informacja o wygaśnięciu
+ * pliku.
  */
 @Slf4j
 @Component

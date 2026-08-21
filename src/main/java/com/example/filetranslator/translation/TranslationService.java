@@ -32,14 +32,16 @@ import java.time.Duration;
 import java.time.Instant;
 
 /**
- * Przyjmowanie zleceń tłumaczenia i odczyty dla ich właściciela.
+ * Przyjmowanie zleceń tłumaczenia oraz odczyty i kasowanie dla ich właściciela.
  *
- * Sam akt tłumaczenia dzieje się gdzie indziej - w TranslationJobWorker, poza żądaniem HTTP.
- * Ta klasa zapisuje zlecenie i oddaje sterowanie; kolejka jest granicą między tym, co widzi
- * użytkownik, a rozmową z zewnętrznym API.
+ * Samo tłumaczenie wykonuje TranslationJobWorker, poza żądaniem HTTP. Ta klasa zapisuje
+ * zlecenie i oddaje sterowanie, dzięki czemu czas odpowiedzi API nie zależy od dostawcy
+ * tłumaczenia - kolejka jest granicą między tym, co widzi użytkownik, a rozmową z zewnętrznym
+ * systemem.
  *
- * WSZYSTKIE odczyty biorą userId do zapytania, nigdy "pobierz i porównaj" - uzasadnienie
- * przy TranslationJobNotFoundException.
+ * Wszystkie odczyty przekazują identyfikator właściciela do zapytania, zamiast pobierać wiersz
+ * i porównywać właściciela w kodzie. Dzięki temu cudze zlecenie jest z zewnątrz nieodróżnialne
+ * od nieistniejącego.
  */
 @Slf4j
 @Service
@@ -53,9 +55,9 @@ public class TranslationService {
     private final MeterRegistry meters;
 
     /**
-     * Transakcja wołana programowo, bo metody publiczne tej klasy NIE są transakcyjne -
-     * rozmowa z magazynem obiektowym musi zostać poza transakcją, żeby nie trzymać
-     * połączenia z puli przez czas przesyłania pliku. Uzasadnienie przy submit.
+     * Transakcja wołana programowo, ponieważ metody publiczne tej klasy nie są transakcyjne:
+     * rozmowa z magazynem obiektowym musi pozostać poza transakcją, żeby nie zajmować
+     * połączenia z puli przez czas przesyłania pliku.
      */
     private final TransactionTemplate transaction;
 
@@ -72,31 +74,28 @@ public class TranslationService {
     }
 
     /**
-     * Przyjmuje zlecenie i oddaje jego stan początkowy.
+     * Przyjmuje zlecenie: zapisuje plik w magazynie, tworzy wiersz kolejki i zwraca stan początkowy.
      *
-     * CELOWO BEZ @Transactional NA METODZIE, w odróżnieniu od poprzedniej wersji. Wgranie
-     * pliku do magazynu obiektowego to rozmowa przez sieć, a transakcja obejmująca ją
-     * trzymałaby połączenie z puli przez cały ten czas - dokładnie ten sam błąd, którego
-     * unika AuthService.login (BCrypt) i OutboxPublisher (rozmowa z SMTP). Przy dużym pliku
-     * i wolnym magazynie kilka równoczesnych zleceń wysuszyłoby pulę na czekaniu na sieć.
+     * Metoda celowo nie jest transakcyjna w całości. Wgranie pliku to rozmowa przez sieć,
+     * a transakcja obejmująca ją trzymałaby połączenie z puli przez cały czas przesyłania -
+     * przy większych plikach kilka równoczesnych zleceń wyczerpałoby pulę na oczekiwaniu na
+     * sieć. Transakcja obejmuje więc wyłącznie to, co musi być atomowe: sprawdzenie limitu
+     * i zapis wiersza. Realizuje ją TransactionTemplate, a nie adnotacja na metodzie prywatnej,
+     * ponieważ wywołanie własnej metody omija proxy Springa.
      *
-     * Transakcja obejmuje więc wyłącznie to, co musi być atomowe: sprawdzenie limitu i zapis
-     * wiersza. Przez TransactionTemplate, a nie przez @Transactional na metodzie prywatnej -
-     * wywołanie własnej metody omija proxy Springa, ta sama pułapka co w RefreshTokenService.
-     *
-     * KOLEJNOŚĆ: NAJPIERW OBIEKT, POTEM WIERSZ. Postgres i magazyn obiektowy nie mają
-     * wspólnej transakcji, więc jedno z dwojga może się nie udać - i cała decyzja polega
-     * na wybraniu, KTÓRA połówka ma zostać. Zostawiamy obiekt bez wiersza: to zajęte miejsce,
-     * które sprząta reguła wygasania na kubełku, i nikt tego nie zauważy. Odwrotnie
-     * zostawiałoby wiersz bez pliku, czyli zlecenie widoczne na liście, którego nie da się
-     * ani przetłumaczyć, ani pobrać, i które trzeba by wykrywać osobnym mechanizmem.
+     * Kolejność operacji - najpierw obiekt, potem wiersz - wynika z tego, że baza i magazyn
+     * obiektowy nie mają wspólnej transakcji, więc trzeba wybrać, która połówka może zostać po
+     * awarii. Zostaje obiekt bez wiersza: to zajęte miejsce, które sprząta reguła wygasania na
+     * kubełku. Odwrotna kolejność zostawiałaby wiersz bez pliku, czyli zlecenie widoczne na
+     * liście, którego nie da się ani przetłumaczyć, ani pobrać, i które wymagałoby osobnego
+     * mechanizmu wykrywania.
      */
     public TranslationJobResponse submit(User owner, UploadedFile file, TargetLanguage targetLang) {
         String contentHash = file.contentHash();
 
-        // Klucz powstaje PRZED wierszem, więc jego segmentem jest UUID, a nie id zlecenia -
-        // uzasadnienie w ObjectKeys. Rozszerzenie bierze się z ROZPOZNANEGO typu, nie z nazwy
-        // przysłanej przez klienta.
+        // Klucz powstaje przed wierszem, więc jego segmentem jest UUID, a nie identyfikator
+        // zlecenia. Rozszerzenie pochodzi z rozpoznanego typu pliku, nie z nazwy przysłanej
+        // przez klienta.
         String jobPrefix = ObjectKeys.jobPrefix(owner.getId(), ObjectKeys.newStorageId());
         String sourceKey = ObjectKeys.sourceKey(jobPrefix, file.type().extension());
 
@@ -113,60 +112,58 @@ public class TranslationService {
         Instant now = DbClock.now();
 
         /*
-         * Dobowy limit znaków chroni KONTO U DOSTAWCY, a zlecenie, które zostanie zaspokojone
-         * z cache'a, nie kosztuje tam ani znaku - naliczanie go byłoby karą za operację, która
-         * nic nie kosztuje.
+         * Dobowy limit znaków chroni konto u dostawcy, a zlecenie zaspokojone z cache'a nie
+         * kosztuje tam ani znaku - naliczanie go byłoby karą za operację, która nic nie kosztuje.
          *
-         * Wygląda to na dziurę: ten sam plik w pętli przechodziłby bez limitu w nieskończoność.
-         * Zamyka ją limiter żądań, który ma na POST /translations osobną politykę (30/h,
-         * application.yml), więc sufit takiej pętli to 30 zleceń na godzinę. Bez tego zdania
-         * pominięcie limitu czyta się jak przeoczenie, a nie jak decyzja.
+         * Pominięcie limitu nie otwiera dziury: ten sam plik wysyłany w pętli ogranicza limiter
+         * żądań, który ma na tę ścieżkę osobną politykę, więc sufit takiej pętli wyznacza liczba
+         * żądań na godzinę.
          *
-         * Sprawdzenie jest tanie: existsCached idzie po indeksie idx_translation_jobs_cache
-         * i odpowiada wyłącznie "czy jest". Kopiowanie wyniku dzieje się później, w workerze.
+         * Samo sprawdzenie jest tanie - idzie po indeksie i odpowiada wyłącznie na pytanie, czy
+         * gotowy wynik istnieje. Kopiowanie wyniku wykonuje później wykonawca kolejki.
          *
-         * Odrzucenie na limicie zostawia wgrany przed chwilą obiekt bez wiersza. To jest
-         * przyjęta cena kolejności opisanej wyżej - osierocony plik wygasa sam.
+         * Odrzucenie na limicie zostawia wgrany przed chwilą obiekt bez wiersza; jest to przyjęta
+         * cena kolejności opisanej wyżej, a osierocony plik wygasa samoczynnie.
          */
         boolean expectedCacheHit =
                 repository.existsCached(owner.getId(), contentHash, targetLang, properties.provider());
 
         /*
-         * Dla DOKUMENTU charCount() daje 0, więc sprawdzenie limitu sprowadza się do pytania
-         * "czy budżet jest już wyczerpany", a nie "czy zmieści się ten plik" - liczby znaków
-         * w PDF-ie nie da się poznać przed wysłaniem go do dostawcy. Konsekwencja przyjęta
-         * świadomie: jeden dokument może przekroczyć dobowy limit, bo naliczy się dopiero
-         * po fakcie (billedChars z odpowiedzi dostawcy). Szkodę ogranicza limit rozmiaru
-         * per format - uzasadnienie w FileType.
+         * Dla dokumentu liczba znaków wynosi zero, więc sprawdzenie limitu sprowadza się do
+         * pytania, czy budżet jest już wyczerpany, a nie czy zmieści się ten plik - liczby znaków
+         * w dokumencie nie da się poznać przed wysłaniem go do dostawcy. Konsekwencją przyjętą
+         * świadomie jest to, że jeden dokument może przekroczyć dobowy limit, ponieważ naliczy się
+         * dopiero po fakcie. Szkodę ogranicza limit rozmiaru pliku ustalony osobno dla każdego
+         * formatu.
          */
         if (!expectedCacheHit) {
             enforceDailyQuota(owner, file.charCount(), now);
         }
 
         /*
-         * Ta sama odpowiedź decyduje o DWÓCH rzeczach i musi być jedna: czy naliczyć limit
-         * teraz i ile znaków ten wiersz wnosi do limitu NASTĘPNYCH zleceń (billedChars).
-         * Rozdzielenie ich na dwa zapytania byłoby tym samym rozjazdem, przed którym ostrzega
-         * komentarz przy findCachedFor - z tą różnicą, że tu rozjazd trwałby w danych.
+         * Wynik sprawdzenia cache'a decyduje o dwóch rzeczach naraz i dlatego pochodzi z jednego
+         * zapytania: czy naliczyć limit teraz oraz ile znaków ten wiersz wniesie do limitu
+         * kolejnych zleceń. Rozdzielenie ich na dwa zapytania groziłoby rozjazdem utrwalonym
+         * w danych.
          */
         TranslationJob job = repository.save(new TranslationJob(
                 owner, file.filename(), targetLang, file.type(), sourceKey, contentHash,
                 file.charCount(), now, expectedCacheHit));
 
-        // Zestawiony z translation.jobs.finished daje długość kolejki bez odpytywania bazy:
-        // rozjazd między tymi dwoma licznikami to zlecenia, które utknęły.
+        // Zestawiony z licznikiem zakończeń daje długość kolejki bez odpytywania bazy: rozjazd
+        // między tymi wartościami to zlecenia, które utknęły.
         meters.counter("translation.jobs.submitted", "target", targetLang.name()).increment();
 
-        // Bez nazwy pliku i bez adresu email w logu - to dane użytkownika. Powiązanie
-        // z żądaniem daje traceId, a id zlecenia jest tym samym uchwytem, co id wiersza
-        // skrzynki nadawczej: worker pracuje na wątku bez MDC, więc bez id po obu stronach
-        // łańcuch "żądanie -> wynik tłumaczenia" urywa się w tym miejscu.
+        // W logu nie ma nazwy pliku ani adresu - to dane użytkownika. Powiązanie z żądaniem daje
+        // identyfikator żądania, a identyfikator zlecenia jest uchwytem po stronie wykonawcy,
+        // który pracuje na wątku bez kontekstu żądania.
         log.info("Przyjęto zlecenie tłumaczenia (id={}, znaków={}, język={})",
                 job.getId(), job.getCharCount(), targetLang);
 
         return toResponse(job);
     }
 
+    /** Sprawdza dobowy budżet znaków wydanych u dostawcy i odrzuca zlecenie, gdy się nie mieści. */
     private void enforceDailyQuota(User owner, int requestedChars, Instant now) {
         int limit = properties.dailyCharLimit();
         long used = repository.sumBilledCharsSince(owner.getId(), now.minus(QUOTA_WINDOW));
@@ -191,20 +188,18 @@ public class TranslationService {
     }
 
     /**
-     * Otwiera wynik do pobrania: strumień z magazynu plus dane do nagłówków.
+     * Otwiera wynik do pobrania: strumień z magazynu wraz z danymi do nagłówków odpowiedzi.
      *
-     * Rozróżnia CZTERY sytuacje, i to rozróżnienie jest całą wartością tej metody: nie ma
-     * takiego zlecenia (404), jest, ale nie jest gotowe (409 ze statusem, żeby front wiedział,
-     * czy dalej odpytywać), jest gotowe, ale pliku już nie ma w magazynie (410), oraz jest
-     * i da się pobrać.
+     * Metoda rozróżnia cztery sytuacje i na tym polega jej wartość: zlecenie nie istnieje lub
+     * należy do kogoś innego, istnieje ale nie jest gotowe (odpowiedź niesie status, żeby
+     * frontend wiedział, czy odpytywać dalej), jest gotowe ale pliku nie ma już w magazynie,
+     * oraz jest gotowe i da się je pobrać.
      *
-     * Czwarty przypadek pojawił się razem z magazynem obiektowym i nie jest teoretyczny:
-     * wiersze kasuje retencja aplikacji, a obiekty - reguła wygasania na kubełku. Te dwie
-     * wartości nie są niczym związane poza uważnością, więc ich rozjazd MUSI mieć objaw
-     * inny niż 500. Patrz ObjectMissingException.
+     * Trzeci przypadek nie jest teoretyczny: wiersze kasuje retencja aplikacji, a obiekty reguła
+     * wygasania na kubełku, więc rozjazd tych dwóch wartości musi mieć objaw inny niż błąd 500.
      *
-     * Strumień otwieramy POZA transakcją: pobieranie pliku trwa tyle, ile trwa łącze klienta,
-     * a połączenie z bazą nie ma prawa być przez ten czas zajęte.
+     * Strumień otwierany jest poza transakcją, ponieważ pobieranie pliku trwa tyle, ile łącze
+     * klienta, a połączenie z bazą nie może być przez ten czas zajęte.
      */
     public TranslationContent openOwnResult(User owner, Long jobId) {
         TranslationResultView view = readResultView(owner, jobId);
@@ -216,9 +211,11 @@ public class TranslationService {
     }
 
     /**
-     * Bez @Transactional i to jest świadome: adnotacja na metodzie wołanej z tej samej klasy
-     * omija proxy Springa, więc nie robiłaby NIC - a wyglądałaby, jakby coś robiła. To jedno
-     * zapytanie, które i tak leci we własnej transakcji repozytorium.
+     * Odczytuje wskazanie na wynik i sprawdza jego gotowość.
+     *
+     * Metoda nie ma adnotacji transakcyjnej, ponieważ wołana jest z tej samej klasy, a wtedy
+     * adnotacja nie zadziałałaby wcale - wyglądając, jakby działała. Jest to jedno zapytanie,
+     * które i tak wykonuje się we własnej transakcji repozytorium.
      */
     private TranslationResultView readResultView(User owner, Long jobId) {
         TranslationResultView view = repository.findResult(jobId, owner.getId())
@@ -233,14 +230,13 @@ public class TranslationService {
     /**
      * Kasuje zlecenie razem z jego plikami.
      *
-     * KOLEJNOŚĆ JEST ODWROTNA NIŻ PRZY TWORZENIU i to nie jest niekonsekwencja - to ten sam
-     * niezmiennik widziany z drugiej strony. Przy tworzeniu: najpierw obiekt, potem wiersz.
-     * Przy kasowaniu: najpierw wiersz, potem obiekt. W obu przypadkach stanem pośrednim,
-     * który może zostać po awarii, jest OBIEKT BEZ WIERSZA - nigdy wiersz bez obiektu.
-     * Pierwsze to zajęte miejsce, które wygasa samo; drugie to zlecenie, którego nie da się
-     * ani przetłumaczyć, ani pobrać.
+     * Kolejność jest odwrotna niż przy tworzeniu i wynika z tego samego niezmiennika widzianego
+     * z drugiej strony: przy tworzeniu najpierw obiekt, potem wiersz; przy kasowaniu najpierw
+     * wiersz, potem obiekt. W obu przypadkach stanem pośrednim po awarii jest obiekt bez wiersza,
+     * czyli zajęte miejsce, które wygasa samoczynnie, a nigdy wiersz bez obiektu, czyli zlecenie
+     * niemożliwe ani do przetłumaczenia, ani do pobrania.
      *
-     * Klucz odczytujemy PRZED skasowaniem wiersza, bo potem nie ma już skąd wziąć prefiksu.
+     * Klucz odczytywany jest przed skasowaniem wiersza, bo potem nie ma już skąd wziąć prefiksu.
      */
     public void deleteOwn(User owner, Long jobId) {
         String sourceKey = repository.findSourceKey(jobId, owner.getId())
@@ -248,35 +244,32 @@ public class TranslationService {
 
         Integer deleted = transaction.execute(status -> repository.deleteOwned(jobId, owner.getId()));
         if (deleted == null || deleted == 0) {
-            // Zniknęło między odczytem klucza a kasowaniem - z punktu widzenia wołającego
-            // to ten sam przypadek co "nie ma takiego zlecenia".
+            // Wiersz zniknął między odczytem klucza a kasowaniem - dla wołającego jest to ten sam
+            // przypadek co brak zlecenia.
             throw new TranslationJobNotFoundException();
         }
 
-        // Po zatwierdzeniu, a nie w transakcji: gdyby kasowanie wiersza wycofało się po
-        // usunięciu plików, zostałoby zlecenie bez treści - czyli dokładnie ten stan,
-        // którego cały ten niezmiennik zabrania.
+        // Po zatwierdzeniu, a nie w transakcji: wycofanie kasowania wiersza po usunięciu plików
+        // zostawiłoby zlecenie bez treści, czyli stan, którego ten niezmiennik zabrania.
         objectStore.deletePrefix(ObjectKeys.prefixOf(sourceKey));
 
         log.info("Usunięto zlecenie tłumaczenia razem z plikami (id={})", jobId);
     }
 
     /**
-     * Kasuje WSZYSTKIE pliki użytkownika. Wołane przy usuwaniu konta z panelu.
+     * Kasuje wszystkie pliki użytkownika. Wołane przy usuwaniu konta z panelu administracyjnego.
      *
-     * KASUJE PLIKI, NIE WIERSZE - i nazwa mówi dokładnie tyle, ile ta metoda robi. Wiersze
-     * translation_jobs znikają razem z wierszem users, bo klucz obcy ma ON DELETE CASCADE
-     * (changeset 0007), czyli w JEDNEJ transakcji z usunięciem konta. Powtórzenie tego
-     * kasowania tutaj byłoby zapytaniem, które zawsze trafia w zero wierszy, a wyglądałoby
-     * jak druga - i jedyna - ścieżka usuwania.
+     * Metoda kasuje pliki, a nie wiersze, i nazwa mówi dokładnie tyle, ile ona robi. Wiersze
+     * zleceń znikają razem z wierszem konta dzięki kaskadzie klucza obcego, czyli w jednej
+     * transakcji z usunięciem konta. Powtórzenie tego kasowania tutaj byłoby zapytaniem zawsze
+     * trafiającym w zero wierszy, a wyglądałoby na jedyną ścieżkę usuwania.
      *
-     * Magazyn obiektów nie ma z tą transakcją nic wspólnego i to jest jedyny powód, dla
-     * którego ta metoda w ogóle istnieje: bajty trzeba usunąć osobnym wywołaniem po sieci.
+     * Magazyn obiektowy nie uczestniczy w tamtej transakcji i to jest jedyny powód istnienia tej
+     * metody: bajty trzeba usunąć osobnym wywołaniem po sieci.
      *
-     * WOŁAĆ PO ZATWIERDZENIU USUNIĘCIA KONTA, nigdy przed. Ten sam niezmiennik co przy
-     * deleteOwn: stanem pośrednim, który może zostać po awarii, jest PLIK BEZ WIERSZA -
-     * miejsce, które sprząta reguła wygasania na kubełku. Odwrotna kolejność zostawiłaby
-     * przy nieudanym usunięciu konto z widocznymi zleceniami, których treści już nie ma.
+     * Wołać po zatwierdzeniu usunięcia konta, nigdy przed - obowiązuje ten sam niezmiennik co
+     * przy kasowaniu pojedynczego zlecenia. Odwrotna kolejność zostawiłaby po nieudanym usunięciu
+     * konto z widocznymi zleceniami, których treści już nie ma.
      */
     public void deleteAllFilesOf(Long userId) {
         objectStore.deletePrefix(ObjectKeys.userPrefix(userId));

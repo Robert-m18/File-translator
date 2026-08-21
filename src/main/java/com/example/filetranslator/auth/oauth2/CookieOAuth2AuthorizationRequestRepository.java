@@ -28,32 +28,29 @@ import java.util.Base64;
 import java.util.Optional;
 
 /**
- * Trzyma żądanie autoryzacyjne OAuth2 w CIASTECZKU, a nie w sesji HTTP.
+ * Przechowuje żądanie autoryzacyjne OAuth2 w ciasteczku zamiast w sesji HTTP.
  *
- * DLACZEGO W OGÓLE ISTNIEJE - bez tego logowanie przez Google w tej aplikacji NIE DZIAŁA.
- * Domyślne HttpSessionOAuth2AuthorizationRequestRepository odkłada żądanie (razem
- * z parametrem "state" i z "nonce") do sesji HTTP, a nasz łańcuch jest zbudowany jako
- * SessionCreationPolicy.STATELESS - sesji po prostu nie ma. Powrót z Google kończy się
- * wtedy błędem authorization_request_not_found, który wskazuje na Google i na konfigurację
- * klienta OAuth2, czyli DOKŁADNIE NIE TAM, gdzie leży przyczyna.
+ * Implementacja jest konieczna, ponieważ domyślny mechanizm odkłada żądanie wraz z parametrami
+ * zabezpieczającymi do sesji HTTP, a łańcuch filtrów tej aplikacji jest bezstanowy i sesji nie
+ * tworzy. Powrót od dostawcy tożsamości kończyłby się wtedy błędem o nieodnalezionym żądaniu
+ * autoryzacyjnym, który wskazuje na konfigurację klienta OAuth2, a więc nie na rzeczywistą
+ * przyczynę.
  *
- * SameSite JEST TU PRZYPIĘTY NA "Lax" I NIE WOLNO GO BRAĆ Z CookieProperties.
- * Profil bazowy ma tam "Strict" (${COOKIE_SAME_SITE:Strict}), a powrót z accounts.google.com
- * to nawigacja MIĘDZYWITRYNOWA - przy Strict przeglądarka tego ciasteczka nie odeśle i całe
- * logowanie wywala się identycznie jak wyżej. Na produkcji CookieProperties dają "None", więc
- * tam by zadziałało; defekt byłby więc widoczny na devie i NIEWIDOCZNY na prodzie, czyli
- * odwrotnie niż zwykle. To ciasteczko żyje kilka minut i jest jednorazowe, więc Lax jest
- * właściwy na obu profilach i nie ma powodu, żeby zależał od środowiska.
+ * Atrybut SameSite jest przypięty do wartości Lax i celowo nie pochodzi z konfiguracji
+ * ciasteczek aplikacji. Profil bazowy ustawia tam wartość ścisłą, a powrót od dostawcy jest
+ * nawigacją międzywitrynową - przy ustawieniu ścisłym przeglądarka nie odesłałaby tego
+ * ciasteczka i logowanie kończyłoby się tym samym błędem. Ciasteczko żyje kilka minut i jest
+ * jednorazowe, więc wartość Lax jest właściwa niezależnie od środowiska.
  *
- * Secure - odwrotnie - idzie Z KONFIGURACJI: na produkcji ciasteczko ma latać wyłącznie
- * po HTTPS, a na localhoście po http, bo inaczej przeglądarka je odrzuci. SameSite=Lax
- * nie wymaga Secure (wymaga go dopiero None), więc te dwie decyzje się nie zazębiają.
+ * Atrybut Secure pochodzi natomiast z konfiguracji, bo na produkcji ciasteczko ma być wysyłane
+ * wyłącznie po HTTPS, a lokalnie po zwykłym HTTP, inaczej przeglądarka je odrzuci. Wartość Lax
+ * nie wymaga atrybutu Secure, więc obie decyzje są od siebie niezależne.
  *
- * DESERIALIZACJA JEST OGRANICZONA FILTREM I TO NIE JEST OZDOBA. Treść ciasteczka przychodzi
- * od klienta, więc przywracanie z niej dowolnego obiektu Javy otwierałoby drogę na gadżety
- * deserializacyjne z classpatha (a jest tu Hibernate, Jackson i cały Spring). ObjectInputFilter
- * przepuszcza wyłącznie klasy potrzebne do odtworzenia tego jednego typu i odrzuca resztę,
- * a limity głębokości i liczby referencji zamykają wariant "mała treść, ogromny graf".
+ * Deserializacja treści ciasteczka jest ograniczona filtrem klas. Treść przychodzi od klienta,
+ * więc odtwarzanie z niej dowolnego obiektu otwierałoby drogę do ataków wykorzystujących klasy
+ * dostępne na ścieżce klas. Filtr przepuszcza wyłącznie typy potrzebne do odtworzenia żądania
+ * autoryzacyjnego, a limity głębokości i liczby referencji zamykają wariant z niewielką treścią
+ * rozwijającą się w ogromny graf obiektów.
  */
 @Slf4j
 @Component

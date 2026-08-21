@@ -16,23 +16,20 @@ import java.time.Instant;
 /**
  * Nocne usuwanie wysłanych wiadomości ze skrzynki nadawczej.
  *
- * DLACZEGO TO ISTNIEJE - do tej pory NIC nie kasowało wierszy z outbox_messages, więc każdy
- * wysłany mail zostawał w bazie na zawsze. Problemem nie był rozmiar tabeli (indeks
- * na (status, next_retry_at) trzyma zapytanie rezerwujące selektywnym), tylko zawartość:
- * payload niesie SUROWY token weryfikacyjny albo resetu hasła, recipient adres email.
- * pending_registrations trzyma wyłącznie SHA-256 tokenu, żeby odczyt bazy nie dawał
- * użytecznego sekretu - bezterminowo trzymany wiersz outboxu znosił sens tego zabiegu,
- * bo ten sam token leżał obok w plaintekście.
+ * Powodem nie jest rozmiar tabeli - indeks utrzymuje zapytanie rezerwujące selektywnym
+ * niezależnie od liczby wierszy - tylko ich zawartość. Ładunek wiadomości niesie surowy token
+ * potwierdzenia adresu albo resetu hasła, a pole odbiorcy jego adres. Poczekalnia rejestracyjna
+ * przechowuje wyłącznie skrót tokenu właśnie po to, żeby odczyt bazy nie dawał użytecznego
+ * sekretu, więc bezterminowo trzymany wiersz skrzynki nadawczej znosiłby sens tego zabiegu -
+ * ten sam token leżałby obok jawnym tekstem.
  *
- * DLACZEGO OSOBNA KLASA, A NIE KROK W ExpiredTokenCleanupJob - tamten job należy do pakietu
- * auth i sprząta tabele auth. Sięganie z niego po repozytorium notification wiązałoby oba
- * pakiety przez wewnętrzne repozytorium, a nie przez API (MailOutbox). Każda funkcja pilnuje
- * retencji własnych danych.
+ * Zadanie należy do pakietu powiadomień, a nie do zadania sprzątającego w pakiecie
+ * uwierzytelniania: sięganie stamtąd po repozytorium tego pakietu wiązałoby oba przez ich
+ * wnętrze, a nie przez udostępnione API. Każda funkcja pilnuje retencji własnych danych.
  *
- * UWAGA na wdrożenie wieloinstancyjne: @Scheduled odpala się w każdej instancji osobno.
- * Tutaj jest to nieszkodliwe - kasowanie jest idempotentne, a warunek na sentAt sprawia,
- * że druga instancja po prostu nie znajdzie już czego usunąć. Ta sama uwaga co
- * w ExpiredTokenCleanupJob.
+ * Przy wdrożeniu wieloinstancyjnym harmonogram uruchamia się w każdej instancji osobno, co jest
+ * tutaj nieszkodliwe: kasowanie jest idempotentne, a warunek na czas wysłania sprawia, że druga
+ * instancja nie znajdzie już czego usunąć.
  */
 @Slf4j
 @Component

@@ -34,14 +34,13 @@ import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 
 /**
- * Zlecenia tłumaczenia plików.
+ * API zleceń tłumaczenia plików: wgranie, podgląd stanu, pobranie wyniku i usunięcie.
  *
- * Wszystkie ścieżki wymagają zalogowania (reguła w SecurityConfig), a POST i DELETE dodatkowo
- * nagłówka CSRF - tak jak każda inna operacja zmieniająca stan w tym API. Tożsamość niesie
- * ciasteczko accessToken, więc frontend musi wołać te endpointy z credentials: 'include'.
+ * Wszystkie ścieżki wymagają zalogowania, a operacje zmieniające stan dodatkowo nagłówka CSRF.
+ * Tożsamość niesie ciasteczko, więc frontend musi wołać te endpointy z dołączonymi ciasteczkami.
  *
- * Kontroler jest wyłącznie warstwą HTTP: rozpakowuje żądanie, woła serwis, buduje odpowiedź.
- * Mapowanie wyjątków na kody stanu siedzi w GlobalExceptionHandler.
+ * Kontroler jest wyłącznie warstwą HTTP: rozpakowuje żądanie, woła serwis i buduje odpowiedź.
+ * Mapowanie wyjątków na kody stanu znajduje się w centralnym handlerze.
  */
 @RestController
 @RequestMapping("/translations")
@@ -49,20 +48,20 @@ import java.util.Locale;
 public class TranslationController {
 
     /**
-     * Sufit rozmiaru strony. Bez niego ?size=100000 zamienia listę w zapytanie zwracające
-     * wszystko, co użytkownik kiedykolwiek zlecił - jednym parametrem w adresie.
+     * Sufit rozmiaru strony. Bez niego jeden parametr w adresie zamieniłby listę w zapytanie
+     * zwracające wszystko, co użytkownik kiedykolwiek zlecił.
      */
     private static final int MAX_PAGE_SIZE = 100;
 
     private final TranslationService translationService;
 
     /**
-     * 202, nie 201: w tej chwili nic jeszcze nie jest przetłumaczone. Powstało zlecenie,
-     * a wynik pojawi się dopiero po przetworzeniu przez workera - tak samo jak rejestracja
-     * odpowiada 202, bo konto powstaje dopiero po potwierdzeniu adresu.
+     * Przyjmuje plik i zwraca utworzone zlecenie ze statusem oczekującym.
      *
-     * Klient dostaje id i odpytuje GET /translations/{id}, aż status przestanie być
-     * PENDING/PROCESSING.
+     * Odpowiedź ma kod 202, a nie 201, ponieważ w chwili odpowiedzi nic jeszcze nie jest
+     * przetłumaczone - powstało wyłącznie zlecenie, a wynik pojawi się po przetworzeniu przez
+     * wykonawcę kolejki. Klient otrzymuje identyfikator i odpytuje o stan, aż przestanie on być
+     * stanem oczekiwania.
      */
     @PostMapping
     public ResponseEntity<TranslationJobResponse> submit(
@@ -89,22 +88,19 @@ public class TranslationController {
     }
 
     /**
-     * Wynik jako plik do pobrania.
+     * Zwraca wynik tłumaczenia jako plik do pobrania.
      *
-     * text/plain z jawnym UTF-8 i Content-Disposition: attachment, więc przeglądarka
-     * zapisuje plik zamiast wyświetlać treść, a polskie znaki nie zamieniają się w krzaki.
+     * Plik leci strumieniem z magazynu, a nie przez tablicę bajtów: wczytanie całości na stertę
+     * tylko po to, żeby zaraz zapisać ją do gniazda, mnożyłoby zużycie pamięci przez liczbę
+     * równoczesnych pobrań. Strumień zamyka Spring po zapisaniu ciała odpowiedzi.
      *
-     * PLIK LECI STRUMIENIEM Z MAGAZYNU, nie przez tablicę bajtów: przy większych plikach
-     * wczytanie całości na stertę tylko po to, żeby ją zaraz zapisać do gniazda, mnoży
-     * zużycie pamięci przez liczbę równoczesnych pobrań. Strumień zamyka Spring po zapisaniu
-     * ciała odpowiedzi.
-     *
-     * DLACZEGO NIE PRZEKIEROWANIE NA PRESIGNED URL, mimo że odciążyłoby aplikację: dostępu
-     * do cudzego zlecenia pilnuje warunek na user_id w zapytaniu, dzięki czemu cudze id daje
-     * 404, a nie 403. Presigned URL to link OKAZICIELSKI - kto go przechwyci, pobierze plik
-     * bez ciasteczka, a samo jego wydanie potwierdza, że zlecenie o tym id istnieje.
-     * Wyzwalacz do rewizji: pliki na tyle duże, że przesyłanie ich przez aplikację zacznie
-     * kosztować - wtedy cena jest płacona świadomie.
+     * Pobieranie idzie przez aplikację, a nie przez przekierowanie na adres podpisany po stronie
+     * magazynu, mimo że tamto rozwiązanie odciążyłoby serwer. Dostępu do cudzego zlecenia pilnuje
+     * warunek na identyfikator właściciela w zapytaniu, więc cudzy identyfikator daje odpowiedź
+     * "nie znaleziono". Adres podpisany jest linkiem na okaziciela - kto go przechwyci, pobierze
+     * plik bez ciasteczka, a samo jego wydanie potwierdza, że zlecenie o danym identyfikatorze
+     * istnieje. Do rewizji tej decyzji skłoniłyby dopiero pliki na tyle duże, że przesyłanie ich
+     * przez aplikację zacznie kosztować.
      */
     @GetMapping("/{id}/content")
     public ResponseEntity<Resource> download(@PathVariable Long id,
@@ -113,10 +109,10 @@ public class TranslationController {
         TranslationContent content = translationService.openOwnResult(user, id);
 
         /*
-         * Nagłówek budowany przez ContentDisposition, NIGDY przez sklejanie tekstu.
-         * Nazwa pochodzi od użytkownika: cudzysłów albo znak nowej linii w niej to
-         * wstrzyknięcie nagłówka, a polskie znaki wymagają kodowania RFC 5987 (filename*).
-         * Builder robi jedno i drugie sam.
+         * Nagłówek budowany przez dedykowany builder, nigdy przez sklejanie tekstu. Nazwa pochodzi
+         * od użytkownika, więc cudzysłów albo znak nowej linii w niej byłyby wstrzyknięciem
+         * nagłówka, a znaki spoza ASCII wymagają osobnego kodowania. Builder obsługuje jedno
+         * i drugie.
          */
         ContentDisposition disposition = ContentDisposition.attachment()
                 .filename(translatedFilename(content), StandardCharsets.UTF_8)
@@ -124,12 +120,12 @@ public class TranslationController {
 
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_DISPOSITION, disposition.toString())
-                // Typ treści z ROZPOZNANEGO formatu, nie na sztywno text/plain: przeglądarka
-                // po nim decyduje, co zrobić z plikiem, a PDF podany jako tekst otwiera się
-                // w karcie jako krzaki zamiast trafić do czytnika.
+                // Typ treści z rozpoznanego formatu, a nie stały: przeglądarka po nim decyduje,
+                // co zrobić z plikiem, a dokument podany jako tekst otwiera się w karcie jako
+                // ciąg nieczytelnych znaków zamiast trafić do właściwego programu.
                 .contentType(MediaType.parseMediaType(content.fileType().contentType()))
-                // Content-Length znany z metadanych obiektu - bez niego odpowiedź leci
-                // kodowaniem porcjowym i przeglądarka nie pokazuje postępu pobierania.
+                // Długość znana z metadanych obiektu - bez niej odpowiedź leci kodowaniem
+                // porcjowym i przeglądarka nie pokazuje postępu pobierania.
                 .contentLength(content.object().size())
                 .body(new InputStreamResource(content.object().content()));
     }
@@ -142,8 +138,10 @@ public class TranslationController {
     }
 
     /**
-     * "lista.txt" + EN-GB -> "lista-EN-GB.txt". Rozszerzenie zostaje na końcu, gdzie ma być,
-     * i bierze się z ROZPOZNANEGO formatu - nie z nazwy przysłanej przez klienta.
+     * Buduje nazwę pliku wynikowego przez dopisanie kodu języka przed rozszerzeniem.
+     *
+     * Rozszerzenie pochodzi z rozpoznanego formatu, a nie z nazwy przysłanej przez klienta,
+     * i zostaje na końcu nazwy, gdzie rozpoznaje je system operacyjny użytkownika.
      */
     private String translatedFilename(TranslationContent content) {
         String extension = content.fileType().extension();

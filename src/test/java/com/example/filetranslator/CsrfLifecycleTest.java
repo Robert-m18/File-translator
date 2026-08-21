@@ -37,7 +37,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * Własny @TestPropertySource jest po to, żeby kontekst nie był współdzielony z klasami,
  * które .with(csrf()) wołają - inaczej podmienione repozytorium przeciekłoby i tutaj.
  *
- * Regresja, której pilnuje: JwtFilter stał przed SessionManagementFilter, więc przy
+ * Test pilnuje pozycji filtra uwierzytelniającego w łańcuchu: ustawiony przed zarządzaniem sesją
  * bezstanowej aplikacji każde uwierzytelnione żądanie wyglądało na "nowe uwierzytelnienie"
  * i CsrfAuthenticationStrategy podmieniała token. Frontend tracił ważny token po pierwszym
  * żądaniu i dostawał 403 na każdym kolejnym żądaniu zmieniającym stan.

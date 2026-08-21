@@ -10,13 +10,13 @@ spring:
     password: "${DATABASE_PASSWORD:postgres}"
   jpa:
     show-sql: true
-  # Domyślnie Mailpit z docker-compose (localhost:1025), a NIE zewnętrzny Mailtrap.
+  # Domyślnie lokalny serwer pocztowy z docker-compose, a nie usługa zewnętrzna.
   #
-  # Poprzednie wartości domyślne celowały w sandbox.smtp.mailtrap.io z atrapą poświadczeń
-  # "dev_test_user"/"dev_test_pass", więc `./mvnw spring-boot:run` startował bez błędu,
-  # przyjmował rejestrację i zwracał 202 - a mail nigdy nie wychodził, bo serwer odrzucał
-  # uwierzytelnienie. Objaw był niewidoczny z poziomu API: rejestracji nie dało się
-  # potwierdzić, czyli nie dało się zalogować, a jedyny ślad leciał do logu OutboxPublishera.
+  # Domyślne ustawienia wskazujące usługę zewnętrzną z zastępczymi poświadczeniami dawałyby
+  # aplikację, która startuje bez błędu i przyjmuje rejestrację, ale nie wysyła żadnej
+  # wiadomości, bo serwer odrzuca uwierzytelnienie. Objaw jest niewidoczny z poziomu API:
+  # rejestracji nie da się potwierdzić, czyli nie da się zalogować, a jedyny ślad trafia
+  # do logu wysyłki poczty.
   #
   # Zmienne środowiskowe nazwane jak na profilu prod (MAIL_USERNAME/MAIL_PASSWORD), żeby
   # przełączenie deva na prawdziwego dostawcę nie wymagało zgadywania innego zestawu nazw.
@@ -35,7 +35,7 @@ spring:
             enable: "${MAIL_SMTP_STARTTLS:false}"
 
 jwt:
-  # Sekret wyłącznie na dev - NIGDY nie używać na produkcji (tam wymuszony przez env JWT_SECRET).
+  # Sekret wyłącznie dla środowiska lokalnego; na produkcji pochodzi ze zmiennej środowiskowej.
   secret: "${JWT_SECRET:devonlysecretnieuzywacnaprodukcjimin32znaki1111111111111111=}"
 
 app:

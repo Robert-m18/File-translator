@@ -30,22 +30,18 @@ public class JwtUtil {
     /**
      * Klucz liczony RAZ, w konstruktorze, a nie przy każdym podpisie i każdym parsowaniu.
      *
-     * Dawniej robiła to prywatna metoda getKey(), wołana z trzech miejsc - w tym z
-     * extractClaims(), czyli na KAŻDYM uwierzytelnionym żądaniu przez JwtFilter. Każde
-     * wywołanie dekodowało base64 i budowało nowy SecretKeySpec, żeby otrzymać obiekt
-     * identyczny z poprzednim: sekret jest wstrzykiwany raz i nie zmienia się przez całe
-     * życie beana. Koszt był mikrosekundowy, więc to nie jest optymalizacja - to usunięcie
-     * pracy, która nigdy nie miała powodu się powtarzać.
+     * Liczenie klucza przy każdym użyciu oznaczałoby dekodowanie sekretu i budowanie nowego
+     * obiektu klucza na każdym uwierzytelnionym żądaniu, za każdym razem z identycznym wynikiem -
+     * sekret wstrzykiwany jest raz i nie zmienia się przez całe życie komponentu.
      *
-     * SecretKeySpec jest niezmienny, a jjwt tworzy własny Mac na każdą operację, więc
-     * współdzielenie jednej instancji między wątkami jest bezpieczne.
+     * Obiekt klucza jest niezmienny, a biblioteka podpisująca tworzy własny obiekt szyfrujący na
+     * każdą operację, więc współdzielenie jednej instancji między wątkami jest bezpieczne.
      *
-     * SKUTEK UBOCZNY, KTÓRY JEST TU ZALETĄ: zły JWT_SECRET (nie-base64 albo krótszy niż
-     * 256 bitów wymagane przez HS256) wywraca teraz START aplikacji, a nie pierwsze
-     * logowanie. Wcześniej kontekst wstawał zdrowo, a wyjątek z Keys.hmacShaKeyFor wychodził
-     * dopiero z ścieżki żądania jako 500 - czyli błąd konfiguracji przebrany za awarię
-     * aplikacji. To ta sama zasada, co w S3ClientConfig.requireComplete i w konstruktorze
-     * DeepLTranslationProvider: brakująca konfiguracja ma zatrzymać wdrożenie od razu.
+     * Ubocznym skutkiem, który jest tu zaletą, jest fail-fast: sekret w złym formacie albo
+     * krótszy, niż wymaga algorytm podpisu, przerywa start aplikacji zamiast ujawniać się przy
+     * pierwszym logowaniu jako błąd serwera, czyli jako błąd konfiguracji przebrany za awarię.
+     * Obowiązuje tu ta sama zasada co przy sprawdzaniu konfiguracji magazynu plików i dostawcy
+     * tłumaczenia: brakująca konfiguracja ma zatrzymać wdrożenie natychmiast.
      */
     private final SecretKey key;
     private final long expiration;
@@ -79,12 +75,11 @@ public class JwtUtil {
 
     public String generateRefreshToken(String username) {
         return Jwts.builder()
-                // jti - losowy identyfikator tokenu. Nie jest ozdobnikiem:
-                // znacznik iat zapisywany jest w JWT z dokładnością do SEKUNDY, więc bez jti
-                // dwa tokeny wydane temu samemu użytkownikowi w tej samej sekundzie miały
-                // identyczny payload, a więc i identyczny podpis - czyli były tym samym
-                // ciągiem znaków. Rotacja tokenu tuż po zalogowaniu łamała wtedy ograniczenie
-                // unikalności token_hash i kończyła się błędem 409.
+                // Losowy identyfikator tokenu jest konieczny, ponieważ znacznik wystawienia
+                // zapisywany jest z dokładnością do sekundy. Bez niego dwa tokeny wydane temu
+                // samemu użytkownikowi w tej samej sekundzie miałyby identyczną treść i identyczny
+                // podpis, czyli byłyby tym samym ciągiem znaków - a wtedy obrót sesji tuż po
+                // zalogowaniu naruszałby unikalność skrótu tokenu w bazie.
                 .id(UUID.randomUUID().toString())
                 .claim("type", "refresh")
                 .subject(username)

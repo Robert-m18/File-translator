@@ -247,19 +247,19 @@ class TranslationDedupTest {
     }
 
     /**
-     * DRUGA POŁOWA tego samego wymagania, i to ta, której brakowało: trafienie nie może
-     * podnosić licznika także NASTĘPNYM zleceniom.
+     * Druga połowa tego samego wymagania: trafienie w cache nie może podnosić licznika
+     * także następnym zleceniom.
      *
-     * Test wyżej sprawdzał wyłącznie, że samo zlecenie z cache'a nie odbija się od limitu -
-     * i przechodził, mimo że limit liczył zużycie sumą charCount po wszystkich wierszach,
-     * czyli doliczał też trafienia. Powtórka nie płaciła więc za siebie, ale zjadała budżet
-     * naprawdę nowym plikom. Znalezione 2026-08-13 ręcznym przejściem na docker compose:
-     * trzy wgrania tego samego pliku po 5 znaków dały zużycie 15 przy najwyżej 5 wydanych
-     * u dostawcy.
+     * Test powyżej sprawdza wyłącznie, że samo zlecenie zaspokojone z cache'a nie odbija się
+     * od limitu, i przechodzi także wtedy, gdy limit sumuje długość wszystkich plików, doliczając
+     * również trafienia. Powtórzony plik nie płaci wtedy za siebie, ale zjada budżet naprawdę
+     * nowym plikom.
+
+
      *
-     * Liczby dobrane tak, żeby test padał przed naprawą: limit 100, plik 60 znaków wgrany
-     * dwa razy (drugi raz z cache'a), potem NOWY plik na 30 znaków. Po naprawie zużycie to
-     * 60, więc nowy plik się mieści; przy sumowaniu charCount byłoby 120 i wróciłoby 429.
+     * Liczby dobrane są tak, żeby test rozróżniał obie implementacje: przy poprawnym liczeniu
+     * zużycie pozwala przyjąć nowy plik, a przy sumowaniu długości wszystkich plików limit
+     * zostałby przekroczony i zlecenie odbiłoby się od niego.
      */
     @Test
     @DisplayName("Trafienie w cache nie zjada limitu następnym zleceniom")

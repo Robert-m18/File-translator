@@ -6,10 +6,10 @@
             http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
 
     <!--
-        Baseline schematu. Wcześniejsze changelogi (20260720-00x) nigdy się nie wykonały
-        (brak spring.liquibase.change-log w konfiguracji + kilka bloków <preConditions>
-        w jednym changesecie, czego Liquibase nie akceptuje), więc zostały zastąpione
-        tym jednym, spójnym baseline'em.
+        Baseline schematu - jeden spójny changelog zastępujący wcześniejsze, które nigdy się
+        nie wykonały z powodu braku wskazania changelogu w konfiguracji i niedozwolonego układu
+        warunków wstępnych w pojedynczym changesecie.
+
 
         preConditions onFail="MARK_RAN" pozwala uruchomić to na bazie deweloperskiej,
         którą wcześniej stworzył Hibernate przez ddl-auto: update - changeset zostanie

@@ -146,7 +146,7 @@ class TranslationFlowTest {
      *
      * Asercja na treści w magazynie, a nie na tym, że kolumna czegoś nie zawiera: gdyby ktoś
      * przywrócił trzymanie treści w bazie, ten test przeszedłby na samym istnieniu klucza.
-     * Sprawdzamy więc, że pod kluczem z wiersza FAKTYCZNIE leży wgrany plik - to jedyna
+     * Test sprawdza więc, że pod kluczem z wiersza faktycznie leży wgrany plik - to jedyna
      * asercja, której nie da się spełnić bez działającego zapisu do magazynu.
      */
     @Test

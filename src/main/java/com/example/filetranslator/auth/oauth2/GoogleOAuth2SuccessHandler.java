@@ -60,10 +60,10 @@ public class GoogleOAuth2SuccessHandler implements AuthenticationSuccessHandler 
         OidcUser oidcUser = (OidcUser) authentication.getPrincipal();
 
         /*
-         * Konto odnajdujemy po "sub", a NIE po adresie z tokenu ID - i to nie jest
-         * nadmiarowe zapytanie. Konto mogło zostać powiązane dawno temu, a adres u Google
-         * zmieniony później; wtedy adres z tokenu nie jest adresem w naszym wierszu.
-         * Token musi nieść TEN NASZ, bo po nim UserDetailsServiceImpl odnajduje
+         * Konto odnajdywane jest po identyfikatorze konta Google, a nie po adresie z tokenu
+         * tożsamości. Konto mogło zostać powiązane wcześniej, a adres u dostawcy
+         * zmieniony później - wtedy adres z tokenu nie jest adresem zapisanym w bazie.
+         * Token musi nieść adres z bazy, ponieważ to po nim warstwa uwierzytelniania odnajduje
          * użytkownika przy każdym kolejnym żądaniu.
          *
          * Konto na tym etapie na pewno istnieje - założył je albo odnalazł

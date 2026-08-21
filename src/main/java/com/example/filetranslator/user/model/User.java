@@ -30,10 +30,10 @@ public class User implements UserDetails {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    // Walidacja danych wejściowych siedzi w DTO (UserRequestDTO), nie w encji.
-    // Adnotacje bean-validation na encji działały tu wręcz szkodliwie: @Size(min=8)
-    // na polu password sprawdzało długość hasha BCrypt (zawsze 60 znaków), a nie hasła.
-    // Tutaj zostają wyłącznie ograniczenia schematu bazy - lustrzane wobec migracji Liquibase.
+    // Walidacja danych wejściowych znajduje się w DTO, nie w encji. Adnotacje walidacyjne
+    // na encji byłyby tu wręcz szkodliwe: reguła długości hasła sprawdzałaby długość jego
+    // skrótu, czyli wartości o stałej długości, a nie samego hasła.
+    // Tutaj zostają wyłącznie ograniczenia schematu bazy, lustrzane wobec migracji.
 
     @Column(nullable = false, length = 50)
     private String name;
@@ -48,7 +48,7 @@ public class User implements UserDetails {
     @Enumerated(EnumType.STRING)
     private Role role = Role.USER;
 
-    // Czy konto zostało potwierdzone emailem. Domyślnie false - wymagane potwierdzenie.
+    // Czy adres konta został potwierdzony. Domyślnie nie - potwierdzenie jest wymagane.
     @Column(nullable = false)
     private boolean enabled = false;
 
@@ -56,7 +56,7 @@ public class User implements UserDetails {
     @Column(name = "failed_login_attempts", nullable = false)
     private int failedLoginAttempts = 0;
 
-    /** Do kiedy konto jest zablokowane. NULL = odblokowane. */
+    /** Do kiedy trwa blokada po nieudanych logowaniach; wartość pusta oznacza brak blokady. */
     @Column(name = "locked_until")
     private Instant lockedUntil;
 
@@ -71,7 +71,7 @@ public class User implements UserDetails {
     @Column(name = "blocked_at")
     private Instant blockedAt;
 
-    /** Powód blokady - ślad audytowy dla drugiego administratora. NIE trafia do logów. */
+    /** Powód blokady - ślad audytowy dla kolejnego administratora. Nie trafia do logów. */
     @Column(name = "blocked_reason", length = 255)
     private String blockedReason;
 
@@ -110,7 +110,7 @@ public class User implements UserDetails {
 
     /**
      * Spring Security woła tę metodę PRZED sprawdzeniem hasła i przy false rzuca
-     * LockedException. Dzięki temu zablokowane konto nie kosztuje nas nawet
+     * LockedException. Dzięki temu zablokowane konto nie kosztuje nawet
      * porównania hasha BCrypt - a to właśnie ono jest kosztowne przy ataku siłowym.
      *
      * Blokada wygasa sama po upływie lockedUntil, więc nie potrzeba zadania
@@ -130,11 +130,10 @@ public class User implements UserDetails {
     /**
      * Czy konto zostało zablokowane przez administratora.
      *
-     * Osobno od isAccountNonLocked(), bo JwtFilter sprawdza WYŁĄCZNIE ten stan. Gdyby
-     * sprawdzał metodę ogólną, blokada po nieudanych logowaniach wyrzucałaby z aplikacji
+     * Stan odrębny od ogólnego stanu konta, ponieważ filtr uwierzytelniający sprawdza wyłącznie
+     * ten. Gdyby sprawdzał stan ogólny, blokada po nieudanych logowaniach wyrzucałaby z aplikacji
      * użytkownika z żywą sesją - a wywołać ją może każdy, wpisując kilka razy złe hasło
-     * na cudzy adres. Byłoby to gotowe narzędzie do wybijania zalogowanych. Pilnuje tego
-     * kontrola negatywna: AdminPanelTest.failedLoginLockout_shouldNotKillLiveSession.
+     * na cudzy adres - byłoby to gotowe narzędzie do wyrzucania zalogowanych użytkowników.
      */
     public boolean isBlocked() {
         return blockedAt != null;

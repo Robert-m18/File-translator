@@ -147,7 +147,7 @@ class ApiContractTest {
          * Konkretnej nazwy nagłówka świadomie NIE sprawdzamy. spring-security-test przy
          * pierwszym użyciu .with(csrf()) podstawia własne repozytorium tokenów na cały
          * kontekst serwletu, więc od tej chwili endpoint zwraca nazwę z biblioteki
-         * testowej, a nie z naszej konfiguracji. Asercja na "X-XSRF-TOKEN" przechodziłaby
+         * testowej, a nie z konfiguracji aplikacji. Asercja na "X-XSRF-TOKEN" przechodziłaby
          * w izolacji i wywalała się w pełnym przebiegu, zależnie od kolejności klas.
          */
         mockMvc.perform(get("/auth/csrf"))

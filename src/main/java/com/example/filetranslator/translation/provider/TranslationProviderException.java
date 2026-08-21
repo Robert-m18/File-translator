@@ -13,8 +13,8 @@ import lombok.Getter;
  *
  *  - code - stabilny, maszynowy identyfikator przyczyny; ląduje w kolumnie last_error
  *    i w logu. Nie wychodzi do klienta API (komunikat obcego systemu w odpowiedzi HTTP
- *    to wyciek informacji), ale to po nim operator rozpoznaje, czy problem jest po naszej
- *    stronie, czy po stronie dostawcy;
+ *    to wyciek informacji), ale to po nim operator rozpoznaje, czy problem leży po stronie
+ *    aplikacji, czy dostawcy;
  *
  *  - retryable - czy ponowienie ma sens. To jest różnica między "serwer dostawcy miał
  *    czkawkę" a "klucz API jest nieprawidłowy": pierwsze samo przejdzie, drugie będzie

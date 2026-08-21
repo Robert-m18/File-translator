@@ -9,15 +9,15 @@ import java.io.InputStream;
 import java.io.UncheckedIOException;
 
 /**
- * Otwarty obiekt: strumień treści plus to, co trzeba wiedzieć, żeby zbudować odpowiedź HTTP.
+ * Otwarty obiekt: strumień treści wraz z danymi potrzebnymi do zbudowania odpowiedzi HTTP.
  *
- * size jest tu po to, żeby dało się ustawić Content-Length. Bez niego odpowiedź leci
- * kodowaniem porcjowym i przeglądarka nie pokazuje postępu pobierania - przy pliku
- * na kilka megabajtów to różnica między "widzę, że się ściąga" a "chyba zawisło".
+ * Rozmiar jest tu po to, żeby dało się ustawić nagłówek długości treści. Bez niego odpowiedź
+ * leci kodowaniem porcjowym i przeglądarka nie pokazuje postępu pobierania, co przy pliku
+ * wielkości kilku megabajtów jest różnicą między widocznym postępem a wrażeniem zawieszenia.
  *
- * AutoCloseable, bo strumień z S3 trzyma połączenie HTTP z puli klienta. Niezamknięty
- * wyczerpuje ją po kilkudziesięciu pobraniach i kolejne blokują się bez błędu - awaria
- * wyglądająca na "aplikacja zwolniła", nie na wyciek zasobu.
+ * Typ jest zamykalny, ponieważ strumień z magazynu zgodnego z S3 trzyma połączenie HTTP z puli
+ * klienta. Niezamknięty wyczerpuje ją po kilkudziesięciu pobraniach, a kolejne blokują się bez
+ * błędu - awaria wygląda wtedy na spowolnienie aplikacji, a nie na wyciek zasobu.
  */
 public record StoredObject(InputStream content, long size, String contentType) implements AutoCloseable {
 

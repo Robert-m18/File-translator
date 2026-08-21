@@ -29,9 +29,9 @@ public class AuthenticationEventListener {
     private final LoginAttemptService loginAttemptService;
 
     /**
-     * Nasłuchujemy konkretnie na błędne dane logowania, a nie na ogólny
-     * AbstractAuthenticationFailureEvent. Ten ostatni obejmuje też zdarzenie
-     * "konto zablokowane" - zliczanie go przedłużałoby blokadę przy każdej kolejnej
+     * Nasłuch obejmuje wyłącznie zdarzenie błędnych danych logowania, a nie ogólne
+     * zdarzenie niepowodzenia uwierzytelnienia. To drugie obejmuje także sytuację
+     * konta zablokowanego, a zliczanie jej przedłużałoby blokadę przy każdej kolejnej
      * próbie i konto faktycznie nigdy by się nie odblokowało.
      */
     @EventListener

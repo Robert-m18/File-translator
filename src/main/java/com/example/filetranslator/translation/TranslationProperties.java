@@ -14,73 +14,77 @@ import java.time.Duration;
 
 /**
  * Ustawienia tłumaczenia plików (prefiks app.translation).
+ *
+ * Typ jest walidowany, więc błędna wartość przerywa start aplikacji zamiast ujawniać się przy
+ * pierwszym zleceniu.
  */
 @Validated
 @ConfigurationProperties(prefix = "app.translation")
 public record TranslationProperties(
 
         /**
-         * Czy worker ma cyklicznie brać zlecenia z kolejki. Na testach wyłączone: worker
-         * odpalający się w tle zabierałby wiersze, które testy chcą sprawdzić, i wynik
-         * zależałby od tego, co zdąży się wykonać. Testy wołają processBatch() wprost.
+         * Czy wykonawca ma cyklicznie pobierać zlecenia z kolejki. W testach wyłączone: wykonawca
+         * działający w tle zabierałby wiersze, które testy chcą sprawdzić, a wynik zależałby od
+         * tego, co zdąży się wykonać. Testy wywołują cykl wprost.
          */
         boolean enabled,
 
-        /** Który dostawca faktycznie tłumaczy. Szczegóły: TranslationProvider. */
+        /** Dostawca wykonujący tłumaczenie. */
         @NotNull Provider provider,
 
         /**
          * Ile znaków użytkownik może zlecić w ciągu doby.
          *
-         * To nie jest ochrona serwera - od tego jest limiter żądań - tylko ochrona konta
-         * u dostawcy. Darmowy próg DeepL liczy się dla CAŁEGO konta, więc jeden użytkownik
-         * w pętli wyczerpuje go dla wszystkich pozostałych. Limitu na adres IP to nie
+         * Nie jest to ochrona serwera - od tego jest limiter żądań - tylko ochrona konta
+         * u dostawcy. Limit darmowego planu liczy się dla całego konta, więc jeden użytkownik
+         * działający w pętli wyczerpałby go dla wszystkich pozostałych. Limit na adres IP tego nie
          * zatrzyma, bo zalogowany użytkownik zmienia adres bez utraty tożsamości.
          */
         @Positive int dailyCharLimit,
 
-        /** Ile zleceń bierzemy na jeden cykl. */
+        /** Ile zleceń pobierać na jeden cykl. */
         @Positive int batchSize,
 
         /**
-         * Ile zleceń z jednej paczki tłumaczymy równolegle.
+         * Ile zleceń z jednej paczki tłumaczyć równolegle.
          *
-         * Musi być ograniczone: dostawcy limitują liczbę równoczesnych żądań, a przekroczenie
-         * kończy się odpowiedzią 429 dla całej paczki. Nieograniczona pula zamieniłaby
+         * Wartość musi być ograniczona: dostawcy limitują liczbę równoczesnych żądań, a jej
+         * przekroczenie kończy się odrzuceniem całej paczki. Pula bez ograniczenia zamieniłaby
          * chwilowy ruch w serię ponowień.
          */
         @Positive int concurrency,
 
-        /** Po tylu podejściach zlecenie dostaje status FAILED. */
+        /** Po tylu podejściach zlecenie zostaje oznaczone jako nieudane. */
         @Positive int maxAttempts,
 
-        /** Podstawa odstępu między próbami. Rośnie wykładniczo z liczbą podejść. */
+        /** Podstawa odstępu między próbami; odstęp rośnie wykładniczo z liczbą podejść. */
         @NotNull Duration retryBackoff,
 
         /**
-         * Na jak długo instancja rezerwuje zlecenie, zabierając się do tłumaczenia. Musi być
-         * wyraźnie dłuższe niż realny czas odpowiedzi dostawcy, inaczej druga instancja
-         * weźmie to samo zlecenie, gdy pierwsza jeszcze czeka.
+         * Na jak długo instancja rezerwuje zlecenie, zabierając się do tłumaczenia.
+         *
+         * Musi być wyraźnie dłuższe niż realny czas odpowiedzi dostawcy, inaczej druga instancja
+         * pobierze to samo zlecenie, gdy pierwsza jeszcze czeka na wynik.
          */
         @NotNull Duration claimTimeout,
 
         /**
          * Co ile pytać dostawcę, czy dokument jest już przetłumaczony.
          *
-         * Osobno od poll-interval kolejki: tamten mówi, jak często zaglądać do WŁASNEJ bazy
-         * (tanie), ten - jak często pytać CUDZE API (liczy się do limitu żądań dostawcy).
-         * Za krótki zamienia jeden dokument w serię żądań, za długi dokłada zwłokę do czasu,
-         * który użytkownik i tak spędza patrząc na ekran.
+         * Wartość odrębna od częstotliwości odpytywania kolejki: tamta mówi, jak często zaglądać
+         * do własnej bazy, ta - jak często odpytywać zewnętrzne API, co liczy się do limitu żądań
+         * dostawcy. Zbyt krótka zamienia jeden dokument w serię żądań, zbyt długa dokłada zwłokę
+         * do czasu, który użytkownik i tak spędza przy ekranie.
          */
         @NotNull Duration documentPollInterval,
 
         /**
-         * Jak długo trzymamy zlecenia, licząc od chwili utworzenia.
+         * Jak długo przechowywane są zlecenia, licząc od chwili utworzenia.
          *
-         * Chodzi o treść, nie o rozmiar tabeli: w source_content i result_content leżą PLIKI
-         * UŻYTKOWNIKA. Bezterminowe trzymanie ich znaczy, że wyciek bazy oddaje wszystko,
-         * co ktokolwiek kiedykolwiek tłumaczył. Użytkownik może skasować zlecenie sam
-         * (DELETE /translations/{id}); retencja jest tym, co dzieje się, gdy tego nie zrobi.
+         * Chodzi o treść, nie o rozmiar tabeli: zlecenia wskazują pliki użytkowników.
+         * Bezterminowe przechowywanie oznaczałoby, że wyciek danych obejmuje wszystko, co
+         * ktokolwiek kiedykolwiek tłumaczył. Użytkownik może skasować zlecenie sam, a retencja
+         * jest tym, co dzieje się, gdy tego nie zrobi.
          */
         @NotNull Duration retention,
 
@@ -88,21 +92,21 @@ public record TranslationProperties(
 ) {
 
     public enum Provider {
-        /** Atrapa - oznacza tekst, nie tłumaczy. Testy i dev bez klucza. */
+        /** Atrapa - oznacza tekst zamiast tłumaczyć. Używana w testach i lokalnie, bez klucza API. */
         ECHO,
-        /** DeepL API. Wymaga app.translation.deepl.api-key. */
+        /** Prawdziwe API DeepL. Wymaga ustawionego klucza. */
         DEEPL
     }
 
     /**
-     * @param apiUrl         baza adresu API; darmowe konta mają INNY host niż płatne
-     *                       (api-free.deepl.com vs api.deepl.com) - pomyłka daje 403
-     * @param apiKey         klucz; nigdy nie może trafić do logu ani do komunikatu wyjątku
-     * @param connectTimeout limit na nawiązanie połączenia
-     * @param readTimeout    limit na odpowiedź; BEZ niego zawieszony dostawca trzyma wątek
-     *                       z puli tłumaczeń w nieskończoność, a przy concurrency=2
-     *                       wystarczą dwa takie żądania, żeby kolejka stanęła bez śladu
-     *                       w logach
+     * @param apiUrl         podstawa adresu API; konta darmowe mają inny host niż płatne,
+     *                       a pomyłka kończy się odrzuceniem uwierzytelnienia
+     * @param apiKey         klucz API; nigdy nie trafia do logu ani do komunikatu wyjątku
+     * @param connectTimeout limit czasu na nawiązanie połączenia
+     * @param readTimeout    limit czasu na odpowiedź; bez niego zawieszony dostawca zajmowałby
+     *                       wątek z puli tłumaczeń w nieskończoność, a przy niewielkiej
+     *                       równoległości wystarczyłyby dwa takie żądania, żeby kolejka stanęła
+     *                       bez żadnego śladu w logach
      */
     public record DeepL(
             String apiUrl,

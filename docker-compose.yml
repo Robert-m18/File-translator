@@ -17,11 +17,11 @@ services:
       # (host "postgres", port 5432), więc mapowanie jest wyłącznie dla narzędzi
       # uruchamianych na hoście - DBeaver, psql, HeidiSQL.
       #
-      # 5432 zostawiamy wolne CELOWO i to nie jest ostrożność na wyrost: na tej
+      # Domyślny port zostaje wolny celowo i nie jest to ostrożność na wyrost: na tej
       # maszynie stoi tam już inny PostgreSQL. Zajęcie domyślnego portu albo
       # wywaliłoby `docker compose up`, albo - gorzej - narzędzie na hoście
       # połączyłoby się z cudzym serwerem, myśląc że ogląda bazę projektu.
-      # Dokładnie tak wyglądała wcześniejsza pułapka z MariaDB na 3306.
+      # Serwer odpowiadający na domyślnym porcie nie jest dowodem na to, który to serwer.
       - "5433:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
@@ -160,10 +160,10 @@ services:
       STORAGE_ACCESS_KEY: minioadmin
       STORAGE_SECRET_KEY: minioadmin
       # Konto administratora zakładane przy starcie - bez niego /actuator/metrics
-      # i /actuator/prometheus są nieosiągalne dla nikogo. Hasło jest tu jawne świadomie:
-      # ten plik jest lokalnym środowiskiem deweloperskim i niesie już postgres/postgres do bazy.
-      # Do application-dev.yml to NIE trafia, bo "dev" jest profilem domyślnym - znane hasło
-      # do konta z dostępem do aktuatora dostawałby wtedy każdy ./mvnw spring-boot:run.
+      # i pozostałe endpointy operacyjne są nieosiągalne dla nikogo. Hasło jest tu jawne
+      # świadomie: plik opisuje lokalne środowisko deweloperskie i niesie już jawne poświadczenia
+      # do bazy. Do konfiguracji profilu domyślnego takie hasło nie trafia, bo wtedy konto
+      # z dostępem do danych operacyjnych powstawałoby przy każdym lokalnym uruchomieniu.
       # echo = atrapa oznaczająca tekst; nic nie wychodzi na zewnątrz i nie trzeba konta
       # u dostawcy. Żeby tłumaczyć naprawdę: TRANSLATION_PROVIDER=deepl i DEEPL_API_KEY
       # z konta DeepL API Free (uwaga: konta darmowe używają hosta api-free.deepl.com,

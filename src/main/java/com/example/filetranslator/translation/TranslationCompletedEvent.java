@@ -7,15 +7,15 @@ package com.example.filetranslator.translation;
 import com.example.filetranslator.translation.model.TargetLanguage;
 
 /**
- * Fakt: zlecenie zostało przetłumaczone.
+ * Opis zdarzenia: zlecenie zostało przetłumaczone.
  *
- * Osobny typ zamiast przekazywania encji, bo to jest opis ZDARZENIA, a nie stanu wiersza.
- * Niesie wyłącznie to, czego potrzebuje odbiorca powiadomienia - bez treści pliku i bez
- * treści tłumaczenia. Ma to znaczenie praktyczne: te dane trafiają do payloadu skrzynki
- * nadawczej, czyli do kolumny trzymanej w bazie plaintekstem.
+ * Osobny typ zamiast przekazywania encji, ponieważ jest to opis zdarzenia, a nie stanu wiersza.
+ * Niesie wyłącznie dane potrzebne odbiorcy powiadomienia - bez treści pliku i bez treści
+ * tłumaczenia. Ma to praktyczne znaczenie: dane te trafiają do ładunku skrzynki nadawczej, czyli
+ * do kolumny przechowywanej w bazie jawnym tekstem.
  *
- * Gdy dojdzie publikacja do Kafki (patrz TranslationEvents), to jest kształt, który
- * pojedzie na topic - dlatego nie ma tu ani encji, ani niczego, co zależy od Hibernate'a.
+ * Taki właśnie kształt pojedzie na topic, jeśli dojdzie publikacja zdarzeń na zewnątrz - dlatego
+ * nie ma tu ani encji, ani niczego, co zależy od warstwy trwałości.
  */
 public record TranslationCompletedEvent(
         Long jobId,

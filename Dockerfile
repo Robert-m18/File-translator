@@ -55,11 +55,11 @@ COPY --from=build --chown=spring:spring /build/extracted/application/ ./
 # trafiają. Profil prod pisze do logs/app.log, czyli ścieżki WZGLĘDNEJ - rozwiązuje
 # się względem /app, a użytkownik spring nie miał tam prawa zapisu.
 #
-# Objaw nie był łagodny: logback zgłasza wtedy "Failed to create parent directories",
-# a Spring Boot 4 podnosi błędy konfiguracji logowania do wyjątku ("Logback
-# configuration error detected"), więc kontener na profilu prod NIE WSTAWAŁ W OGÓLE.
-# Na dev problem nie występuje i dlatego był niewidoczny: żaden profil poza prod nie
-# ustawia logging.file.name, więc logback spada na ${java.io.tmpdir}/spring.log.
+# Objaw nie jest łagodny: system logowania zgłasza wtedy brak możliwości utworzenia katalogu,
+# a framework podnosi błędy konfiguracji logowania do wyjątku, więc kontener na profilu
+# produkcyjnym w ogóle nie wstaje.
+# Lokalnie problem nie występuje i dlatego jest trudny do zauważenia: żaden inny profil nie
+# ustawia pliku logu, więc trafia on do katalogu tymczasowego systemu.
 RUN mkdir -p /app/logs && chown -R spring:spring /app
 
 USER spring
@@ -69,14 +69,14 @@ EXPOSE 8080
 # kontenera, więc ten sam obraz działa poprawnie przy różnych limitach.
 ENV JAVA_OPTS="-XX:MaxRAMPercentage=75.0 -XX:+ExitOnOutOfMemoryError"
 
-# Uruchamiamy cienki jar z warstwy "application", NIE przez JarLauncher.
+# Uruchamiany jest cienki jar z warstwy aplikacji, a nie launcher archiwum wykonywalnego.
 #
 # Tryb "tools" w Spring Boot 4 rozkłada archiwum inaczej niż dawny "layertools":
 # w application/ leży zwykły jar z Main-Class i z Class-Path wskazującym na lib/,
-# zależności lądują w dependencies/lib/, a katalog spring-boot-loader/ jest PUSTY -
-# klasa org.springframework.boot.loader.launch.JarLauncher w tym układzie nie
-# istnieje. Poprzedni ENTRYPOINT wywoływał ją wprost, więc obraz budował się
-# poprawnie i wywalał się dopiero przy starcie kontenera na ClassNotFoundException.
+# zależności lądują w osobnej warstwie, a katalog loadera pozostaje pusty, więc jego klasa
+# startowa w tym układzie nie istnieje. Wywołanie jej wprost daje obraz, który buduje się
+# poprawnie i przewraca się dopiero przy starcie kontenera na braku klasy.
+
 # Warstwy kopiowane są płasko do /app, dlatego względne lib/... z manifestu trafia
 # dokładnie tam, gdzie leżą zależności.
 ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar application.jar"]

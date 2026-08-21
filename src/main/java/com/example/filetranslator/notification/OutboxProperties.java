@@ -25,11 +25,11 @@ public record OutboxProperties(
          */
         boolean enabled,
 
-        /** Ile wiadomości bierzemy na jeden cykl. */
+        /** Ile wiadomości pobierać na jeden cykl. */
         @Positive int batchSize,
 
         /**
-         * Ile maili z jednej paczki wysyłamy równolegle.
+         * Ile wiadomości z jednej paczki wysyłać równolegle.
          *
          * Musi być ograniczone, i to jest tu cała trudność: serwery SMTP limitują liczbę
          * jednoczesnych połączeń z jednego adresu, a przekroczenie limitu kończy się
@@ -55,22 +55,18 @@ public record OutboxProperties(
         @NotNull Duration claimTimeout,
 
         /**
-         * Jak długo trzymamy wysłane wiadomości, licząc od chwili wysłania.
+         * Jak długo przechowywane są wysłane wiadomości, licząc od chwili wysłania.
          *
-         * Nie chodzi o rozmiar tabeli - indeks (status, next_retry_at) trzyma zapytanie
-         * rezerwujące selektywnym niezależnie od tego, ile SENT-ów się nazbiera. Chodzi
-         * o to, CO leży w tych wierszach: payload niesie SUROWY token weryfikacyjny albo
-         * resetu hasła, a recipient adres email. Tabela zgłoszeń rejestracji trzyma tylko
-         * SHA-256 tokenu właśnie po to, żeby odczyt bazy nie dawał użytecznego sekretu -
-         * wysłany wiersz outboxu trzymany bezterminowo znosi sens tego hashowania.
+         * Powodem nie jest rozmiar tabeli, tylko zawartość wierszy: ładunek wiadomości niesie
+         * surowy token potwierdzenia adresu albo resetu hasła, a pole odbiorcy jego adres.
+         * Poczekalnia rejestracyjna przechowuje wyłącznie skrót tokenu, żeby odczyt bazy nie
+         * dawał użytecznego sekretu, więc bezterminowo przechowywany wiersz skrzynki nadawczej
+         * znosiłby sens tego zabiegu.
          *
-         * Doba jest wartością wyprowadzoną, nie zgadniętą: token rejestracji jest ważny
-         * 24 h (najdłuższy z naszych; reset hasła to 1 h), więc po tym czasie payload
-         * nie niesie już nic, czym można się posłużyć. Trzymanie wiersza dłużej wydłuża
-         * wyłącznie okno ekspozycji plaintextu.
-         *
-         * Podnoszenie tego wymaga świadomej decyzji o retencji sekretów, a nie samego
-         * "przydałaby się dłuższa historia wysyłek" - do historii służy log.
+         * Wartość jest wyprowadzona z ważności tokenów: najdłuższy z nich wygasa po dobie, więc
+         * po tym czasie ładunek nie niesie już niczego, czym dałoby się posłużyć. Dłuższe
+         * przechowywanie wydłuża wyłącznie okno ekspozycji jawnych sekretów, a do historii
+         * wysyłek służy log.
          */
         @NotNull Duration retention
 ) {

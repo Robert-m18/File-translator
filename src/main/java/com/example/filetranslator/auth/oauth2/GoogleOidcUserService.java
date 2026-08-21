@@ -22,31 +22,28 @@ import java.util.Base64;
 /**
  * Zamienia tożsamość potwierdzoną przez Google na konto w tej aplikacji.
  *
- * TO JEST MIEJSCE NA KONTROLE BEZPIECZEŃSTWA, a nie handler sukcesu - i to nie jest kwestia
- * gustu. Wyjątek rzucony stąd jest wyjątkiem uwierzytelnienia, więc Spring Security kieruje
- * go do handlera PORAŻKI, który odsyła użytkownika na front z kodem błędu. Handler sukcesu
- * nie ma jak odmówić: w jego sygnaturze nie ma wyjątku uwierzytelnienia, a użytkownik jest
- * na tym etapie już uwierzytelniony.
+ * Kontrole bezpieczeństwa znajdują się tutaj, a nie w handlerze sukcesu, ponieważ wyjątek
+ * rzucony z tego miejsca jest wyjątkiem uwierzytelnienia i trafia do handlera niepowodzenia,
+ * który odsyła użytkownika na front z kodem błędu. Handler sukcesu nie ma jak odmówić: jego
+ * sygnatura nie przewiduje takiego wyjątku, a użytkownik jest na tym etapie już uwierzytelniony.
  *
- * DWIE KONTROLE, KTÓRYCH NIE ROBI ZA NAS NIKT INNY:
+ * Wykonywane są dwie kontrole, których nie realizuje żadna inna warstwa:
  *
- * 1. POTWIERDZENIE ADRESU. Bez roszczenia email_verified = true adres z tokenu ID jest
- *    tylko napisem. Ponieważ to WŁAŚNIE po adresie łączymy konto Google z istniejącym
- *    kontem hasłowym (UserService.findOrCreateGoogleUser), przepuszczenie niepotwierdzonego
- *    adresu zamieniłoby łączenie kont w ich PRZEJMOWANIE: wystarczyłoby założyć konto Google
- *    na cudzy adres.
+ * 1. Potwierdzenie adresu przez dostawcę tożsamości. Bez niego adres z tokenu tożsamości jest
+ *    tylko napisem, a ponieważ to właśnie po adresie konto zewnętrzne łączone jest z istniejącym
+ *    kontem hasłowym, przepuszczenie niepotwierdzonego adresu zamieniłoby łączenie kont w ich
+ *    przejmowanie - wystarczyłoby założyć konto u dostawcy na cudzy adres.
  *
- * 2. BLOKADA ADMINISTRACYJNA. Logowanie przez OAuth2 OMIJA W CAŁOŚCI DaoAuthenticationProvider,
- *    a więc i BlockedAccountChecker, i isAccountNonLocked(). Bez tej linijki blokada po prostu
- *    NIE DZIAŁA na ścieżce Google: zablokowany dostaje 423 przy logowaniu hasłem i wchodzi
- *    bokiem przez Google. Ten sam kształt błędu ta aplikacja miała już raz w
- *    AuthService.refreshToken - kontrola była, ale nie na wszystkich ścieżkach.
+ * 2. Blokada administracyjna. Logowanie przez OAuth2 omija w całości mechanizm sprawdzający stan
+ *    konta przy logowaniu hasłem, więc bez tej kontroli blokada nie działałaby na tej ścieżce:
+ *    zablokowany użytkownik dostawałby odmowę przy logowaniu hasłem i wchodził bokiem przez
+ *    dostawcę zewnętrznego.
  *
- *    Sprawdzamy isBlocked(), a NIE isAccountNonLocked() - dokładnie z tego samego powodu,
- *    dla którego robi tak JwtFilter. Ta druga obejmuje też blokadę po nieudanych logowaniach,
- *    którą KAŻDY może wywołać na KAŻDYM, wpisując kilka razy złe hasło na znany adres.
- *    Użyta tutaj dałaby gotowe narzędzie do odcinania dowolnego użytkownika od logowania
- *    Google, bez znajomości jego hasła.
+ *    Sprawdzana jest wyłącznie blokada administracyjna, a nie ogólny stan konta - z tego samego
+ *    powodu co w filtrze uwierzytelniającym. Stan ogólny obejmuje także blokadę po nieudanych
+ *    logowaniach, którą każdy może wywołać na dowolnym koncie, podając kilka razy złe hasło do
+ *    znanego adresu. Użycie go tutaj dałoby gotowe narzędzie do odcinania dowolnego użytkownika
+ *    od logowania zewnętrznego, bez znajomości jego hasła.
  */
 @Slf4j
 @Service
@@ -54,8 +51,12 @@ public class GoogleOidcUserService extends OidcUserService {
 
     /**
      * Długość losowego sekretu, z którego liczony jest hash hasła konta założonego przez
-     * Google. Sekret jest natychmiast porzucany - nikt go nigdy nie pozna, także my.
-     * Dlaczego w ogóle hash, zamiast NULL-a w kolumnie: changeset 0014-users-google-account.xml.
+     * dostawcę zewnętrznego. Sekret jest natychmiast porzucany i nigdzie nie zapisywany.
+     *
+     * Hash zamiast wartości pustej, ponieważ kolumna hasła jest wymagana, a mechanizm logowania
+     * hasłem porównuje podaną wartość z jej zawartością. Dzięki temu próba logowania hasłem na
+     * takie konto kończy się zwykłym błędem poświadczeń, bez ujawniania, że konto powstało
+     * u dostawcy zewnętrznego.
      */
     private static final int PLACEHOLDER_SECRET_BYTES = 32;
 
@@ -71,10 +72,10 @@ public class GoogleOidcUserService extends OidcUserService {
 
     @Override
     public OidcUser loadUser(OidcUserRequest userRequest) throws OAuth2AuthenticationException {
-        // super.loadUser rozmawia z Google (token ID + końcówka userinfo). Cała NASZA
-        // logika siedzi w resolve() poniżej - rozdzielone właśnie po to, żeby dało się ją
-        // wykonać w teście bez sieci i bez atrapy serwera autoryzacyjnego. Test atrapy
-        // sprawdzałby atrapę; tak sprawdza dokładnie te rozgałęzienia, które są nasze.
+        // Wywołanie nadrzędne rozmawia z dostawcą tożsamości. Logika tej aplikacji siedzi
+        // w metodzie poniżej - rozdzielenie pozwala wykonać ją w teście bez sieci i bez atrapy
+        // serwera autoryzacyjnego, dzięki czemu test sprawdza rzeczywiste rozgałęzienia
+        // aplikacji, a nie zachowanie atrapy.
         OidcUser oidcUser = super.loadUser(userRequest);
         resolve(oidcUser);
         return oidcUser;
@@ -95,13 +96,11 @@ public class GoogleOidcUserService extends OidcUserService {
         }
 
         /*
-         * Normalizacja adresu JAWNIE, bo nie przychodzi on tu przez DTO - kompaktowy
-         * konstruktor, który normalizuje LoginRequest czy UserRequestDTO, nie ma na tej
-         * ścieżce czego tknąć. To trzecie takie miejsce, obok UserDetailsServiceImpl
-         * i AdminBootstrap. Bez tego PostgreSQL (porównujący teksty z rozróżnianiem
-         * wielkości liter) potraktowałby "Jan@Example.com" z Google jako inny adres niż
-         * "jan@example.com" w bazie i założyłby DRUGIE konto na ten sam adres - czyli
-         * dziurę w modelu tożsamości, a nie niedogodność.
+         * Adres normalizowany jest jawnie, ponieważ nie przychodzi tu przez DTO, a to konstruktory
+         * DTO wykonują normalizację na pozostałych ścieżkach. Bez niej baza porównująca teksty
+         * z rozróżnianiem wielkości liter potraktowałaby adres zapisany wielkimi literami jako
+         * inny niż ten sam adres w bazie i założyłaby drugie konto na ten sam adres - czyli lukę
+         * w modelu tożsamości, a nie zwykłą niedogodność.
          */
         String email = EmailNormalizer.normalize(oidcUser.getEmail());
 
@@ -120,11 +119,11 @@ public class GoogleOidcUserService extends OidcUserService {
     /**
      * Hash losowego sekretu dla konta, które hasła nie ma i mieć nie będzie.
      *
-     * Liczony przy KAŻDYM logowaniu, także wtedy, gdy konto już istnieje i wartość zostanie
-     * zignorowana. To świadomy koszt jednego BCrypta na logowanie przez Google: wariant
-     * "policz tylko, gdy zakładasz konto" wymagałby wcześniejszego sprawdzenia, czy konto
-     * istnieje, czyli dodatkowego zapytania na każdej ścieżce - i rozdzielenia decyzji
-     * o zakładaniu konta na dwa miejsca, z wyścigiem pomiędzy nimi.
+     * Wartość liczona jest przy każdym logowaniu, także wtedy, gdy konto już istnieje i zostanie
+     * zignorowana. Jest to świadomy koszt jednego przeliczenia hasła na logowanie: liczenie go
+     * wyłącznie przy zakładaniu konta wymagałoby wcześniejszego sprawdzenia, czy konto istnieje,
+     * czyli dodatkowego zapytania na każdej ścieżce, oraz rozdzielenia decyzji o zakładaniu konta
+     * na dwa miejsca, z wyścigiem pomiędzy nimi.
      */
     private String placeholderPasswordHash() {
         byte[] secret = new byte[PLACEHOLDER_SECRET_BYTES];

@@ -54,11 +54,11 @@ import java.net.URI;
  * na zamknięciu sesji ścigałoby się z zamykaniem pul połączeń w cache'owanych kontekstach Springa
  * i dosypywało błędów do logu na sam koniec zielonego buildu.
  *
- * ŚWIADOMIE BEZ testcontainers.reuse.enable. Reuse zostawia kontenery przy życiu między
- * przebiegami, co dla Redisa jest aktywnie szkodliwe: kubełki limitera mają TTL i przeżywają
- * przebieg, więc RateLimitMethodTest zaczyna dostawać 429 tam, gdzie oczekuje 401 - objaw
- * wyglądający jak regresja limitera, a nie jak brud po poprzednim uruchomieniu. Kosztowało to
- * już raz czas przy odtwarzaniu joba "integration" lokalnie (2026-08-13).
+ * Ponowne używanie kontenerów jest świadomie wyłączone. Zostawia ono kontenery przy życiu
+ * między przebiegami, co dla pamięci podręcznej limitera jest szkodliwe: kubełki mają termin
+ * ważności i przeżywają przebieg, więc testy limitera zaczynają dostawać odmowę z powodu limitu
+ * tam, gdzie oczekują odmowy uwierzytelnienia - objaw wygląda jak regresja limitera, a nie jak
+ * pozostałość po poprzednim uruchomieniu.
  */
 public class TestInfrastructure implements LauncherSessionListener {
 

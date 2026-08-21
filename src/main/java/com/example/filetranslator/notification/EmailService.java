@@ -37,12 +37,12 @@ public class EmailService {
     public EmailService(JavaMailSender mailSender,
                         TemplateEngine templateEngine,
                         @Value("${app.frontend.url}") String frontendUrl,
-                        // Adres nadawcy, a NIE spring.mail.username. To były wcześniej te same
-                        // ustawienia i wyglądało to niewinnie, bo u części dostawców login SMTP
-                        // faktycznie jest adresem. U SES czy SendGrida jest nim klucz API albo
-                        // użytkownik IAM, a lokalnie - dowolny ciąg z docker-compose. Serwer
-                        // odrzuca wtedy kopertę na MAIL FROM (553 5.1.3) i nie wychodzi ŻADEN
-                        // mail: rejestracji nie da się potwierdzić, więc nie da się też zalogować.
+                        // Adres nadawcy jest osobnym ustawieniem, a nie loginem SMTP. U części
+                        // dostawców login bywa adresem, ale u innych jest kluczem API albo nazwą
+                        // użytkownika technicznego, a lokalnie dowolnym ciągiem znaków. Użycie
+                        // loginu jako nadawcy kończy się odrzuceniem koperty przez serwer i tym,
+                        // że nie wychodzi żadna wiadomość - a wtedy nie da się potwierdzić
+                        // rejestracji ani, w konsekwencji, zalogować.
                         @Value("${app.mail.from}") String mailFrom) {
         this.mailSender = mailSender;
         this.templateEngine = templateEngine;
@@ -83,8 +83,8 @@ public class EmailService {
      *
      * Mail niesie NAZWĘ pliku i link do listy zleceń - nigdy treści tłumaczenia. Powód jest
      * ten sam, dla którego payload skrzynki nadawczej nie może nieść sekretów: wiadomość
-     * przechodzi przez serwery, na które nie mamy wpływu, i zostaje w skrzynce odbiorcy
-     * bezterminowo, czyli dłużej niż retencja samego zlecenia po naszej stronie.
+     * przechodzi przez serwery poza kontrolą aplikacji i zostaje w skrzynce odbiorcy
+     * bezterminowo, czyli dłużej niż retencja samego zlecenia.
      */
     public void sendTranslationDoneEmail(String toEmail, String name, String filename) {
         Context context = new Context();
@@ -97,17 +97,13 @@ public class EmailService {
     }
 
     /**
-     * Wspólna wysyłka. Synchroniczna i RZUCAJĄCA wyjątek przy porażce.
+     * Wspólna ścieżka wysyłki - synchroniczna i zgłaszająca wyjątek przy niepowodzeniu.
      *
-     * Jedno i drugie jest tu istotne. Wcześniej metody były @Async, a wyjątek był łapany
-     * i logowany - bo nie było komu go zgłosić: transakcja rejestracji była już
-     * zatwierdzona, a informacja o nieudanej wysyłce nigdzie nie trafiała.
-     *
-     * Teraz wołającym jest OutboxPublisher, który MUSI znać wynik, żeby zapisać status
-     * wiadomości i zaplanować ponowienie. Przełknięcie wyjątku tutaj oznaczałoby oznaczanie
-     * jako wysłane maili, które nigdy nie wyszły - czyli dokładne odwrócenie sensu skrzynki
-     * nadawczej. Wątek również nie jest już potrzebny: publisher i tak działa poza wątkiem
-     * obsługującym żądanie HTTP.
+     * Obie te cechy są istotne. Wołającym jest mechanizm skrzynki nadawczej, który musi znać
+     * wynik, żeby zapisać status wiadomości i zaplanować ponowienie; przełknięcie wyjątku
+     * oznaczałoby oznaczanie jako wysłane wiadomości, które nigdy nie wyszły, czyli odwrócenie
+     * sensu całej skrzynki. Osobny wątek nie jest tu potrzebny, bo wysyłka i tak nie odbywa się
+     * na wątku obsługującym żądanie HTTP.
      */
     private void send(String toEmail, String subject, String template, Context context, String opis) {
         String htmlBody = templateEngine.process(template, context);
@@ -124,13 +120,13 @@ public class EmailService {
             log.debug("Wysłano mail {}", opis);
 
         } catch (MessagingException e) {
-            // MessagingException jest kontrolowany, a nie chcemy nim zaśmiecać sygnatur
-            // w górę - publisher łapie po prostu Exception i zapisuje powód porażki.
+            // Wyjątek kontrolowany nie jest przepuszczany dalej, żeby nie zaśmiecać sygnatur
+            // w górę - wysyłka łapie wyjątek ogólny i zapisuje powód porażki.
             throw new MailDeliveryException("Nie udało się zbudować maila " + opis, e);
         }
-        // MailException (niekontrolowany) leci wyżej sam. To ją rzuca mailSender.send()
-        // przy niedostępnym albo odrzucającym serwerze SMTP - czyli w najczęstszym
-        // przypadku awarii.
+        // Wyjątek niekontrolowany leci wyżej sam - zgłasza go wysyłka przy niedostępnym
+        // albo odrzucającym serwerze pocztowym, czyli w najczęstszym przypadku awarii.
+
     }
 
     /** Porażka wysyłki. Łapana przez OutboxPublisher, który decyduje o ponowieniu. */

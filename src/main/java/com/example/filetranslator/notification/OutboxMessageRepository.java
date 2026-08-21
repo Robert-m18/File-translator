@@ -26,25 +26,20 @@ public interface OutboxMessageRepository extends JpaRepository<OutboxMessage, Lo
     /**
      * Kandydaci do wysłania - od razu zablokowani dla tej instancji.
      *
-     * FOR UPDATE SKIP LOCKED (tak Hibernate tłumaczy PESSIMISTIC_WRITE z limitem blokady
-     * -2) sprawia, że druga instancja czytająca w tym samym momencie nie zobaczy wierszy
-     * zajętych przez pierwszą, tylko przeskoczy do następnych. Bez tego obie instancje
-     * odczytałyby ten sam komplet i jedna z nich odpadłaby dopiero przy rezerwacji,
-     * marnując całą rundę - przy kilku instancjach to skaluje się w złą stronę.
+     * Klauzula FOR UPDATE SKIP LOCKED (tak Hibernate tłumaczy blokadę zapisu z limitem -2)
+     * sprawia, że druga instancja czytająca w tym samym momencie pomija wiersze zajęte przez
+     * pierwszą i przechodzi do następnych. Bez niej obie odczytałyby ten sam komplet, a jedna
+     * odpadłaby dopiero przy rezerwacji, marnując całą rundę - przy większej liczbie instancji
+     * skaluje się to w złą stronę.
      *
-     * Blokada wisi tylko przez transakcję rezerwacji, czyli przez jeden UPDATE. Rozmowa
-     * z SMTP toczy się długo po jej zwolnieniu - blokady bazodanowe nigdy nie obejmują
-     * operacji zewnętrznej.
+     * Blokada trwa tylko przez transakcję rezerwacji. Rozmowa z serwerem pocztowym toczy się po
+     * jej zwolnieniu, bo blokada bazodanowa nigdy nie obejmuje operacji zewnętrznej.
      *
-     * Na PostgreSQL Hibernate emituje "... for no key update of m skip locked". FOR NO KEY
-     * UPDATE to słabsza blokada niż FOR UPDATE, ale nadal koliduje z innymi blokadami zapisu
-     * na tym samym wierszu, więc rozłączność odczytów - jedyna własność, na której nam tu
-     * zależy - trzyma się bez zmian.
-     *
-     * H2 2.4 (testy) obsługuje SKIP LOCKED tak samo - sprawdzone na dwóch połączeniach,
-     * nie tylko składniowo. Gdyby to się kiedyś rozjechało, byłby to rozjazd między testami
-     * a produkcją dotyczący współbieżności, czyli najgorszy z możliwych; dlatego jest to
-     * warunek utrzymania tej wersji H2.
+     * Na PostgreSQL powstaje z tego blokada słabsza niż pełna blokada zapisu, ale nadal
+     * kolidująca z innymi blokadami zapisu na tym samym wierszu, więc rozłączność odczytów -
+     * jedyna istotna tu własność - pozostaje zachowana. Baza używana w testach obsługuje tę
+     * klauzulę tak samo, co jest warunkiem tego, żeby testy i produkcja zachowywały się
+     * jednakowo w kwestii współbieżności.
      */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "-2")) // org.hibernate.Timeouts.SKIP_LOCKED
@@ -65,11 +60,10 @@ public interface OutboxMessageRepository extends JpaRepository<OutboxMessage, Lo
      * przed wzięciem wiersza, który zmienił stan między czasem odczytu a wykonaniem UPDATE-u
      * (np. gdy poprzednia rezerwacja tej samej instancji jeszcze nie wygasła).
      *
-     * Nie ma statusu "w trakcie wysyłki": gdyby proces padł po rezerwacji, taki status
-     * zostałby na wieki i wiersz utknąłby na zawsze. Tutaj wiersz zostaje jako NEW
-     * z odsuniętym nextRetryAt, więc wróci sam po upływie okna. Licznik attempts zlicza
-     * więc PODEJŚCIA, nie potwierdzone porażki - świadomy wybór na rzecz braku stanów
-     * zablokowanych.
+     * Nie istnieje status oznaczający wysyłkę w toku: gdyby proces padł po rezerwacji, taki
+     * status zostałby na stałe i wiersz utknąłby na zawsze. Zamiast tego wiersz pozostaje nowy,
+     * z odsuniętym terminem, więc wraca do obiegu samoczynnie po upływie okna rezerwacji.
+     * Konsekwencją jest to, że licznik zlicza podejścia, a nie potwierdzone porażki.
      *
      * @return ile wierszy faktycznie zarezerwowano
      */
@@ -124,14 +118,13 @@ public interface OutboxMessageRepository extends JpaRepository<OutboxMessage, Lo
     /**
      * Usuwa wysłane wiadomości starsze niż podany moment.
      *
-     * Kasujemy WYŁĄCZNIE status SENT. FAILED zostaje i to nie jest przeoczenie: countFailed()
-     * jest jedyną odpowiedzią na pytanie "czy maile w ogóle wychodzą", więc sprzątaczka
-     * zabierająca FAILED wyzerowałaby ten sygnał i awaria dostarczania wyglądałaby jak cisza.
-     * NEW też zostaje - to wiadomości jeszcze w obiegu, czekające na próbę albo na backoff.
+     * Kasowane są wyłącznie wiadomości wysłane. Nieudane zostają, ponieważ ich liczba jest
+     * jedyną odpowiedzią na pytanie, czy poczta w ogóle wychodzi - sprzątanie obejmujące je
+     * wyzerowałoby ten sygnał i awaria dostarczania wyglądałaby jak cisza. Wiadomości nowe
+     * również zostają, bo są jeszcze w obiegu i czekają na próbę albo na odstęp przed nią.
      *
-     * Odliczamy od sentAt, nie od createdAt: retencja dotyczy czasu, jaki minął od wysłania.
-     * Wiersz o statusie SENT ma sentAt zawsze ustawione - markSent nadaje jedno i drugie
-     * w tym samym UPDATE.
+     * Wiek liczony jest od wysłania, a nie od utworzenia, bo retencja dotyczy czasu, jaki minął
+     * od momentu, w którym treść opuściła aplikację.
      */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("""

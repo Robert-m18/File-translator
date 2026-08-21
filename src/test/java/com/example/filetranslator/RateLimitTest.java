@@ -82,7 +82,7 @@ class RateLimitTest {
     }
 
     /**
-     * Regresja na kolejność filtrów.
+     * Test pilnuje kolejności filtrów.
      *
      * Odpowiedź 429 musi nieść nagłówki CORS, inaczej przeglądarka ją zablokuje i frontend
      * stojący na innym origin dostanie błąd sieci od fetch() zamiast komunikatu "spróbuj za X s" -

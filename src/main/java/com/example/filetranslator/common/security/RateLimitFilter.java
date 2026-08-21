@@ -44,17 +44,11 @@ import java.util.Optional;
  * odrzucone żądanie nie kosztuje ani zapytania do bazy, ani porównania hasha BCrypt, czyli
  * dokładnie tego, co przy ataku siłowym jest najdroższe.
  *
- * Ta pozycja to naprawa konkretnego błędu, nie porządkowanie kolejności. Wcześniej filtr
- * stał PRZED całym łańcuchem (@Component + @Order(HIGHEST_PRECEDENCE + 10)), czyli również
- * przed CorsFilter - a wtedy odpowiedź 429 wychodziła BEZ nagłówka Access-Control-Allow-Origin.
- * Przeglądarka blokuje taką odpowiedź, więc frontend na innym origin nie dostawał komunikatu
- * "spróbuj ponownie za X s", tylko błąd sieci od fetch(): dla użytkownika wyglądało to jak
- * padnięty serwer, a nie jak przekroczony limit. Treść odpowiedzi była poprawna od zawsze -
- * po prostu nigdy nie docierała. Sprawdzone 2026-08-04 curl-em z nagłówkiem Origin,
- * regresję pilnuje RateLimitTest.
- *
- * Filtr CORS jest tani (kilka porównań nagłówków), więc przesunięcie za niego nie psuje
- * zasady, dla której limiter stoi wcześnie.
+ * Pozycja za filtrem CORS jest warunkiem tego, żeby odmowa w ogóle dotarła do przeglądarki:
+ * odpowiedź wysłana wcześniej nie ma nagłówków CORS, a taką odpowiedź przeglądarka blokuje.
+ * Frontend na innym origin zobaczyłby wtedy błąd sieci zamiast komunikatu o limicie, czyli coś
+ * nieodróżnialnego od niedziałającego serwera. Sam filtr CORS jest tani, więc przesunięcie za
+ * niego nie narusza zasady, dla której limiter stoi na początku łańcucha.
  */
 @Slf4j
 public class RateLimitFilter extends OncePerRequestFilter {
@@ -105,11 +99,10 @@ public class RateLimitFilter extends OncePerRequestFilter {
 
         long retryAfterSeconds = Math.max(1, probe.getNanosToWaitForRefill() / 1_000_000_000L);
 
-        // Adres IP w logu jest tu WYJĄTKIEM od zasady "nie logujemy danych osobowych"
-        // i wyjątkiem świadomym. To jedyny log o nadużyciu, a bez adresu nie da się na nim
-        // niczego zrobić: ani odróżnić jednego bota od tysiąca użytkowników za NAT-em, ani
-        // zablokować źródła. Zdjęcie IP stąd zamienia ten log w licznik bez treści -
-        // gdyby ktoś chciał to "poprawić", to jest powód, dla którego zostaje.
+        // Adres IP jest tu świadomym wyjątkiem od zasady nielogowania danych osobowych. Jest to
+        // jedyny wpis o nadużyciu, a bez adresu nie da się na jego podstawie nic zrobić: ani
+        // odróżnić jednego bota od wielu użytkowników za wspólnym adresem, ani zablokować źródła.
+        // Usunięcie adresu zamieniłoby ten wpis w licznik bez treści.
         log.warn("Przekroczono limit żądań dla {} (ścieżka {}), ponowna próba za {}s",
                 clientIp(request), policy.path(), retryAfterSeconds);
 

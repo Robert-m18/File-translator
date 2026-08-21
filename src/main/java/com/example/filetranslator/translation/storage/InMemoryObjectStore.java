@@ -13,22 +13,20 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Magazyn w pamięci procesu. Domyślna implementacja.
+ * Magazyn trzymający obiekty w pamięci procesu - implementacja domyślna.
  *
- * PO CO ISTNIEJE: żeby aplikacja i testy nie wymagały stojącego magazynu obiektowego.
- * Dokładnie ta sama rola co Mailpit dla poczty i EchoTranslationProvider dla tłumaczenia -
- * lokalne zastępstwo, dzięki któremu `docker compose up` jest działającym systemem bez
- * konta u dostawcy. W testach obsługuje już tylko wariant `./mvnw test -Ph2` (bez Dockera):
- * domyślny przebieg idzie na MinIO w kontenerze, więc S3ObjectStore wykonuje się naprawdę.
+ * Istnieje po to, żeby aplikacja i testy nie wymagały stojącego magazynu obiektowego. Jest to ta
+ * sama rola, którą dla poczty pełni lokalny serwer testowy, a dla tłumaczenia atrapa dostawcy:
+ * uruchomienie środowiska nie wymaga konta u zewnętrznego dostawcy. W testach obsługuje wariant
+ * bez Dockera, ponieważ domyślny przebieg korzysta z prawdziwego magazynu w kontenerze.
  *
- * NIE NADAJE SIĘ DO NICZEGO POZA TYM i nie udaje, że się nadaje: zawartość ginie przy
- * restarcie, nie jest współdzielona między instancjami i rośnie bez ograniczenia. Przy dwóch
- * instancjach użytkownik dostawałby "pliku nie ma" w zależności od tego, którą trafi -
- * dlatego prawdziwe wdrożenie ustawia app.storage.type=s3.
+ * Do zastosowań produkcyjnych się nie nadaje i tego nie ukrywa: zawartość ginie przy restarcie,
+ * nie jest współdzielona między instancjami i rośnie bez ograniczenia. Przy dwóch instancjach
+ * użytkownik dostawałby informację o braku pliku zależnie od tego, którą trafi.
  *
- * Ostrzeżenie przy starcie jest tu z tego samego powodu, dla którego ma je atrapa tłumacza:
- * gdy ktoś zapomni ustawić zmiennej, objawem jest poprawnie działająca aplikacja, która
- * po restarcie zgubiła wszystkie pliki. Jedna linia w logu rozstrzyga to w sekundę.
+ * Ostrzeżenie przy starcie istnieje z tego samego powodu co przy atrapie tłumacza: gdy rodzaj
+ * magazynu zostanie pominięty w konfiguracji, objawem jest poprawnie działająca aplikacja, która
+ * po restarcie zgubiła wszystkie pliki. Jedna linia w logu rozstrzyga to natychmiast.
  */
 @Slf4j
 @Component
@@ -49,7 +47,7 @@ public class InMemoryObjectStore implements ObjectStore {
 
     @Override
     public void put(String key, byte[] content, String contentType) {
-        // Kopia tablicy, nie referencja: wołający może swoją zmodyfikować, a magazyn ma
+        // Kopia tablicy zamiast referencji: wołający może zmodyfikować swoją, a magazyn ma
         // zachowywać się jak magazyn, czyli oddawać to, co dostał w chwili zapisu.
         objects.put(key, new StoredBytes(content.clone(),
                 contentType == null ? OCTET_STREAM : contentType));
@@ -88,8 +86,8 @@ public class InMemoryObjectStore implements ObjectStore {
     private StoredBytes require(String key) {
         StoredBytes stored = objects.get(key);
         if (stored == null) {
-            // Bez klucza w komunikacie - niesie identyfikator użytkownika, a komunikat
-            // trafia do logu. Ten sam powód co przy ObjectStoreException.
+            // Bez klucza w komunikacie - niesie on identyfikator użytkownika, a komunikat trafia
+            // do logu.
             throw new ObjectMissingException("Pliku nie ma już w magazynie");
         }
         return stored;

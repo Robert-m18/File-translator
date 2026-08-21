@@ -25,16 +25,11 @@ import lombok.Setter;
 import java.time.Instant;
 
 /**
- * Jedno zlecenie tłumaczenia pliku.
+ * Jedno zlecenie tłumaczenia pliku - wiersz kolejki i zarazem stan widoczny dla użytkownika.
  *
- * Uzasadnienie modelu, mechaniki rezerwacji i długości kolumn: changelog
- * 0007-translation-jobs.xml.
- *
- * TREŚCI PLIKÓW TU NIE MA - od changesetu 0011 leżą w magazynie obiektowym, a wiersz
- * trzyma same klucze. Odczyty prezentacyjne dalej idą przez projekcje
- * w TranslationJobRepository: powód przestał być rozmiarem wiersza, ale zasada się nie
- * zmienia, bo projekcja jest też tym, co pilnuje, żeby przez API nie wyciekło pole,
- * którego nikt nie zamierzał pokazywać.
+ * Wiersz nie zawiera treści plików: te leżą w magazynie obiektowym, a encja trzyma same klucze.
+ * Odczyty prezentacyjne i tak korzystają z projekcji, ponieważ projekcja pilnuje również tego,
+ * żeby przez API nie wyciekło pole, którego nikt nie zamierzał pokazywać.
  */
 @Getter
 @Setter
@@ -48,8 +43,8 @@ public class TranslationJob {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    // LAZY: worker potrzebuje właściciela dopiero przy zamawianiu maila, a większość
-    // zapytań i tak filtruje po user_id, nie po obiekcie użytkownika.
+    // Pobranie leniwe: właściciel potrzebny jest dopiero przy zamawianiu powiadomienia,
+    // a większość zapytań filtruje po identyfikatorze użytkownika, nie po obiekcie.
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "user_id", nullable = false)
     private User user;
@@ -57,7 +52,7 @@ public class TranslationJob {
     @Column(name = "original_filename", nullable = false, length = 255)
     private String originalFilename;
 
-    /** Wykrywany przez dostawcę, więc NULL aż do udanego tłumaczenia. */
+    /** Język źródła wykrywa dostawca, więc pole pozostaje puste do udanego tłumaczenia. */
     @Column(name = "source_lang", length = 10)
     private String sourceLang;
 
@@ -70,93 +65,93 @@ public class TranslationJob {
     private TranslationStatus status = TranslationStatus.PENDING;
 
     /**
-     * Klucz pliku źródłowego w magazynie obiektowym. Nie URL - uzasadnienie w ObjectStore
-     * i w changesecie 0011.
+     * Klucz pliku źródłowego w magazynie obiektowym - klucz, nie adres URL, żeby zmiana
+     * dostawcy magazynu, regionu czy domeny nie unieważniała zapisanych wartości.
      *
-     * Ustawiany w konstruktorze, bo obiekt jest zapisywany PRZED wstawieniem wiersza:
+     * Ustawiany w konstruktorze, ponieważ obiekt zapisywany jest przed wstawieniem wiersza:
      * wiersz bez pliku to zlecenie, które nigdy się nie wykona, a osierocony plik to tylko
-     * zajęte miejsce, które sprząta reguła wygasania na kubełku.
+     * zajęte miejsce, które usuwa reguła wygasania na kubełku.
      */
     @Column(name = "source_object_key", nullable = false, length = 512)
     private String sourceObjectKey;
 
-    /** Klucz wyniku. NULL do chwili udanego tłumaczenia - tak jak wcześniej result_content. */
+    /** Klucz wyniku - pusty do chwili udanego tłumaczenia. */
     @Column(name = "result_object_key", length = 512)
     private String resultObjectKey;
 
     /**
-     * Format pliku - rozpoznany po ZAWARTOŚCI przy wgrywaniu, nie po nazwie.
+     * Format pliku rozpoznany po zawartości przy wgrywaniu, nie po nazwie.
      *
-     * Decyduje też o tym, którym API dostawcy tłumaczyć: tekst idzie zwykłym, PDF i XLSX
-     * dokumentowym. Uzasadnienie obu ścieżek: FileType.
+     * Decyduje również o tym, którym API dostawcy tłumaczyć: tekst idzie interfejsem tekstowym,
+     * formaty binarne dokumentowym.
      */
     @Enumerated(EnumType.STRING)
     @Column(name = "file_type", nullable = false, length = 10)
     private FileType fileType = FileType.TXT;
 
     /**
-     * Uchwyt do dokumentu wgranego u dostawcy - NULL dla zleceń tekstowych i dopóki dokument
-     * nie został wgrany.
+     * Uchwyt do dokumentu wgranego u dostawcy - pusty dla zleceń tekstowych i do chwili wgrania.
      *
-     * Zapisany, żeby rezerwacja, która wygasła w trakcie tłumaczenia, mogła WRÓCIĆ do
-     * odpytywania zamiast wgrywać dokument (i płacić za niego) drugi raz. Pełne uzasadnienie:
-     * DocumentHandle i changeset 0013.
+     * Zapisany po to, żeby rezerwacja wygasła w trakcie tłumaczenia pozwalała wrócić do
+     * odpytywania o gotowy wynik zamiast wgrywać dokument i płacić za niego drugi raz.
      */
     @Column(name = "provider_document_id", length = 255)
     private String providerDocumentId;
 
-    /** Sekret wystawiony przez dostawcę razem z identyfikatorem. NIE trafia do logów. */
+    /** Sekret wystawiony przez dostawcę razem z identyfikatorem. Nie trafia do logów. */
     @Column(name = "provider_document_key", length = 255)
     private String providerDocumentKey;
 
     /**
-     * SHA-256 treści źródłowej, szesnastkowo - odcisk pod deduplikację.
+     * Odcisk treści źródłowej (SHA-256 zapisany szesnastkowo) - klucz deduplikacji.
      *
-     * Nullable wyłącznie ze względu na wiersze sprzed changesetu 0008: skrótu nie da się
-     * policzyć w przenośnym SQL-u, więc nie było czym ich wypełnić. Każde nowe zlecenie
-     * ma go ustawionego w konstruktorze.
+     * Pole dopuszcza wartość pustą wyłącznie ze względu na wiersze sprzed wprowadzenia
+     * deduplikacji, których nie było czym wypełnić w przenośnym SQL-u. Każde nowe zlecenie ma
+     * odcisk ustawiony w konstruktorze.
      */
     @Column(name = "content_hash", length = 64)
     private String contentHash;
 
     /**
-     * Dostawca, który wyprodukował wynik - znany dopiero przy zapisie, stąd NULL do tego czasu.
+     * Dostawca, który wykonał tłumaczenie - znany dopiero przy zapisie wyniku.
      *
      * Wchodzi do klucza deduplikacji razem z odciskiem treści i językiem docelowym. Bez niego
-     * gotowe zlecenie wykonane przez atrapę (ECHO) zaspokoiłoby zlecenie kierowane do DEEPL -
-     * jedyny przypadek, w którym cache oddaje wynik BŁĘDNY, a nie tylko szybki.
+     * wynik wykonany przez atrapę zaspokoiłby zlecenie kierowane do prawdziwego dostawcy, co jest
+     * jedynym przypadkiem, w którym deduplikacja zwraca wynik błędny, a nie tylko szybki.
      */
     @Enumerated(EnumType.STRING)
     @Column(name = "provider", length = 20)
     private TranslationProperties.Provider provider;
 
-    /** Liczba znaków źródła - długość pliku pokazywana użytkownikowi, bez czytania treści. */
+    /** Liczba znaków źródła - długość pliku pokazywana użytkownikowi. */
     @Column(name = "char_count", nullable = false)
     private int charCount;
 
     /**
-     * Znaki FAKTYCZNIE WYDANE u dostawcy - to na niej, a nie na charCount, liczy się dobowy limit.
+     * Znaki faktycznie wydane u dostawcy - to na nich, a nie na długości pliku, liczy się dobowy
+     * limit.
      *
-     * Zlecenie zaspokojone z cache'a ma tu 0, bo u dostawcy nie kosztowało ani znaku. Rozdzielenie
-     * jest konieczne, bo po fakcie wiersz z cache'a jest nieodróżnialny od zwykłego: provider
-     * dostaje wypełniony tak samo (musi, bo wchodzi do klucza deduplikacji). Uzasadnienie
-     * i historia defektu: changelog 0009-translation-billed-chars.xml.
+     * Zlecenie zaspokojone z cache'a ma tu zero, bo u dostawcy nie kosztowało ani znaku.
+     * Rozdzielenie obu wartości jest konieczne, ponieważ po fakcie wiersz zaspokojony z cache'a
+     * jest nieodróżnialny od zwykłego - pole dostawcy wypełnia się tak samo, bo wchodzi do klucza
+     * deduplikacji.
      *
-     * Wartość ustawiana przy przyjęciu zlecenia jest PRZEWIDYWANIEM (patrz TranslationService),
-     * a worker koryguje ją przy zapisie wyniku - dopiero tam wiadomo, czy dostawca był wołany.
+     * Wartość ustawiana przy przyjęciu zlecenia jest przewidywaniem, a wykonawca koryguje ją przy
+     * zapisie wyniku, gdy wiadomo już, czy dostawca był wołany.
      */
     @Column(name = "billed_chars", nullable = false)
     private int billedChars;
 
-    /** Liczy podejścia (rezerwacje), nie potwierdzone porażki - jak w skrzynce nadawczej. */
+    /** Liczy podejścia, czyli rezerwacje wiersza, a nie potwierdzone porażki. */
     @Column(nullable = false)
     private int attempts = 0;
 
     /**
-     * Kiedy najwcześniej wolno wziąć to zlecenie do obróbki.
+     * Najwcześniejszy moment, w którym wolno wziąć to zlecenie do obróbki.
      *
-     * Pełni dwie role naraz: nośnika backoffu po porażce i rezerwacji wiersza przez
-     * instancję, która właśnie zabiera się do tłumaczenia (patrz TranslationJobWorker).
+     * Pole pełni dwie role naraz: niesie backoff po porażce i stanowi rezerwację wiersza przez
+     * instancję, która właśnie zabiera się do tłumaczenia. Dzięki temu zlecenie porzucone przez
+     * proces, który padł, wraca do obiegu samoczynnie.
      */
     @Column(name = "next_attempt_at", nullable = false)
     private Instant nextAttemptAt;
@@ -172,10 +167,10 @@ public class TranslationJob {
 
     /**
      * @param expectedCacheHit czy w chwili przyjęcia istniał już gotowy wynik tej treści -
-     *                         decyduje o billedChars. To PRZEWIDYWANIE, nie fakt: gotowy wiersz
-     *                         może zniknąć (skasowany przez użytkownika, wygaszony przez
-     *                         retencję) zanim worker weźmie zlecenie, dlatego worker zapisuje
-     *                         przy wyniku wartość ostateczną.
+     *                         decyduje o liczbie znaków wliczanych do limitu. Jest to
+     *                         przewidywanie, a nie fakt: gotowy wiersz może zniknąć, zanim
+     *                         wykonawca weźmie zlecenie, dlatego wartość ostateczną zapisuje
+     *                         wykonawca razem z wynikiem
      */
     public TranslationJob(User user,
                           String originalFilename,
@@ -192,13 +187,13 @@ public class TranslationJob {
         this.fileType = fileType;
         this.sourceObjectKey = sourceObjectKey;
         this.contentHash = contentHash;
-        // charCount podawany z zewnątrz, bo treści już tutaj nie ma - plik leży
-        // w magazynie obiektowym, a długość policzył ten, kto go tam wgrał.
+        // Liczba znaków podawana z zewnątrz, ponieważ treści tu nie ma - plik leży w magazynie
+        // obiektowym, a długość policzył ten, kto go tam wgrał.
         this.charCount = charCount;
         this.billedChars = expectedCacheHit ? 0 : charCount;
         this.status = TranslationStatus.PENDING;
         this.attempts = 0;
-        // Gotowe do wzięcia natychmiast - worker zabierze je przy najbliższym cyklu
+        // Zlecenie jest gotowe do wzięcia natychmiast - wykonawca zabierze je w najbliższym cyklu.
         this.nextAttemptAt = now;
         this.createdAt = now;
     }

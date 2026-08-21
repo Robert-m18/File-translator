@@ -17,19 +17,19 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 /**
  * Nagłówki, które frontend na innym origin MUSI móc odczytać.
  *
- * DLACZEGO TO OSOBNY TEST: przeglądarka udostępnia JavaScriptowi wyłącznie nagłówki
- * wymienione w Access-Control-Expose-Headers - reszta jest dla niego niewidoczna, mimo że
- * fizycznie przyszła w odpowiedzi. Objaw pominięcia jest CICHY, bo żądanie kończy się
- * sukcesem: pobieranie pliku działa, tylko nazwa zaproponowana przez serwer nie dociera
- * i front zapisuje plik pod nazwą awaryjną.
+ * Test jest osobny, ponieważ przeglądarka udostępnia skryptom wyłącznie nagłówki wymienione
+ * w odpowiedniej deklaracji CORS - reszta jest dla nich niewidoczna, mimo że fizycznie
+ * przyszła w odpowiedzi. Objaw pominięcia jest cichy, bo żądanie kończy się powodzeniem:
+ * pobieranie pliku działa, tylko nazwa zaproponowana przez serwer nie dociera do frontu,
+ * który zapisuje plik pod nazwą awaryjną.
  *
- * Znalezione 2026-08-10 przez przejście przepływu w przeglądarce - plik "lista-FR.txt"
- * zapisał się jako "tlumaczenie.txt". To ta sama klasa błędu co odpowiedź 429 bez nagłówków
- * CORS: kod po stronie serwera jest poprawny od zawsze, po prostu nigdy nie dociera tam,
- * gdzie miał.
+ * Jest to ta sama klasa błędu co odpowiedź o przekroczeniu limitu wysłana bez nagłówków CORS:
+ * kod po stronie serwera jest poprawny, po prostu nie dociera tam, gdzie miał.
+
+
  *
- * Zwykłe testy MockMvc tego nie wyłapią, bo pytają serwer bezpośrednio, bez polityki CORS
- * i bez przeglądarki, która cokolwiek by ukryła.
+ * Zwykłe testy warstwy webowej tego nie wyłapią, bo pytają serwer bezpośrednio, bez polityki
+ * CORS i bez przeglądarki, która cokolwiek by ukryła.
  */
 @SpringBootTest
 @AutoConfigureMockMvc

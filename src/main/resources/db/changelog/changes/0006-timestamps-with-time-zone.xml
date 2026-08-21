@@ -9,15 +9,15 @@
         Wszystkie kolumny czasowe przechodzą z "timestamp WITHOUT time zone" na "WITH time zone",
         a encje z LocalDateTime na Instant.
 
-        DLACZEGO - kolumna bez strefy przechowuje gołą ścianę zegara i nie mówi, czyj to zegar.
-        Kod zapisywał do niej LocalDateTime.now(), czyli czas w strefie domyślnej JVM-a, więc
-        instancja na hoście (Europe/Warsaw) i instancja w kontenerze (UTC) wpisywały do jednej
-        tabeli dwa różne zegary i nic tego nie sygnalizowało. Zaobserwowane 2026-08-08
-        w outbox_messages: wiersz o id 4 z created_at 11:28 obok zapisanego PRZED nim wiersza
-        o id 3 z godziną 13:14.
+        Kolumna bez strefy przechowuje samą ścianę zegara i nie mówi, czyj to zegar.
+        Zapisywany był do niej czas w strefie domyślnej maszyny wirtualnej, więc instancja
+        uruchomiona lokalnie i instancja w kontenerze wpisywały do jednej tabeli dwa różne
+        zegary i nic tego nie sygnalizowało - w skrajnym przypadku wiersz zapisany później
+        miał wcześniejszy znacznik czasu niż wiersz zapisany przed nim.
 
-        Doraźnie załatwiono to wymuszeniem UTC w main(). To działa, ale ma dwie wady, których
-        nie da się usunąć bez zmiany typu kolumny: baza pokazuje godzinę przesuniętą względem
+
+        Wymuszenie jednej strefy w kodzie startowym rozwiązuje to doraźnie, ale ma dwie wady,
+        których nie da się usunąć bez zmiany typu kolumny: baza pokazuje godzinę przesuniętą
         zegara oglądającego, a każda strefa ze zmianą czasu (a taka jest potrzebna, żeby pokazywać
         czas lokalny) raz w roku powtarza godzinę 02:00-02:59 - znaczniki przestają wtedy rosnąć
         i warunki typu "next_retry_at &lt;= now" tracą sens na całą tę godzinę.

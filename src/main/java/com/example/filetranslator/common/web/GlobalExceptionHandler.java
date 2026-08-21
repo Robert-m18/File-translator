@@ -40,42 +40,36 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Centralny handler wyjątków - jedno miejsce, w którym wyjątek zamienia się w odpowiedź HTTP.
+ * Centralne mapowanie wyjątków na odpowiedzi HTTP w formacie RFC 9457 (ProblemDetail).
  *
- * Dziedziczy po ResponseEntityExceptionHandler, dzięki czemu wyjątki rzucane przez sam
- * Spring MVC (nieparsowalny JSON, brakujący parametr, zła metoda HTTP, 404 na nieznanej
- * ścieżce) też wracają jako ProblemDetail, a nie jako domyślna strona błędu Spring Boota.
+ * Klasa dziedziczy po ResponseEntityExceptionHandler, dzięki czemu wyjątki rzucane przez sam
+ * Spring MVC - nieparsowalny JSON, brakujący parametr, niedozwolona metoda, nieznana ścieżka -
+ * również wracają jako ProblemDetail zamiast domyślnej strony błędu.
  *
- * Zasada: kontrolery i serwisy rzucają wyjątki dziedzinowe i nie wiedzą nic o kodach HTTP.
- * Mapowanie wyjątek -> status siedzi wyłącznie tutaj.
+ * Obowiązująca zasada: kontrolery i serwisy rzucają wyjątki dziedzinowe i nie znają kodów HTTP,
+ * a całe mapowanie wyjątek - status znajduje się tutaj. Korzyścią jest jeden format odpowiedzi
+ * dla wszystkich błędów i jedno miejsce, w którym widać, co API zwraca w każdej sytuacji.
+ *
+ * Nie ma tu handlera dla konfliktu adresu e-mail przy rejestracji, i jest to decyzja, a nie
+ * przeoczenie: gotowa odpowiedź "adres już istnieje" stoi wprost naprzeciw zasady, że API nie
+ * zdradza, które adresy są zarejestrowane.
  */
 @Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
 
-    /*
-     * Nie ma tu handlerów NotFoundException i EmailAlreadyExistException - oba wyjątki
-     * zniknęły razem z martwym CRUD-em w UserService. Drugi z nich był wręcz pułapką:
-     * odpowiedź 409 EMAIL_ALREADY_EXISTS stoi wprost naprzeciw zasady, że API nie zdradza,
-     * które adresy są zarejestrowane (patrz handleBadCredentials niżej i AuthService.register).
-     * Gotowy handler kusiłby, żeby go użyć przy pierwszym lepszym konflikcie adresu.
-     *
-     * Nieznana ścieżka HTTP i tak wraca jako ProblemDetail - obsługuje ją
-     * ResponseEntityExceptionHandler, po którym ta klasa dziedziczy.
-     */
-
+    /** Nieprawidłowe poświadczenia logowania. */
     @ExceptionHandler(BadCredentialsException.class)
     public ProblemDetail handleBadCredentials(BadCredentialsException ex) {
         log.warn("Nieprawidłowe dane logowania");
-        // Celowo jeden komunikat dla złego emaila i złego hasła - inaczej API
-        // pozwalałoby sprawdzić, które adresy są zarejestrowane (enumeracja użytkowników).
+        // Jeden komunikat dla nieznanego adresu i błędnego hasła - inaczej API pozwalałoby
+        // sprawdzić, które adresy są zarejestrowane.
         return ApiProblem.of(HttpStatus.UNAUTHORIZED, "Błąd logowania",
                 "Nieprawidłowy email lub hasło", "BAD_CREDENTIALS");
     }
 
     /**
-     * Rzucane przez Spring Security, gdy User.isEnabled() zwraca false -
-     * konto istnieje, ale email nie został jeszcze potwierdzony.
+     * Konto istnieje, ale jego adres nie został jeszcze potwierdzony (User.isEnabled() = false).
      */
     @ExceptionHandler(DisabledException.class)
     public ProblemDetail handleDisabled(DisabledException ex) {
@@ -85,13 +79,11 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     }
 
     /**
-     * Rzucane przez Spring Security, gdy User.isAccountNonLocked() zwraca false -
-     * konto zablokowane po serii nieudanych logowań.
+     * Konto zablokowane po serii nieudanych logowań (User.isAccountNonLocked() = false).
      *
-     * Zwracamy 423 Locked i wprost mówimy, co się stało. To świadomy kompromis:
-     * informacja "konto zablokowane" potwierdza napastnikowi, że dany adres istnieje,
-     * ale prawowity użytkownik musi wiedzieć, dlaczego poprawne hasło nie działa -
-     * bez tego zgłasza awarię, a nie czeka na wygaśnięcie blokady.
+     * Odpowiedź nazywa przyczynę wprost i jest to świadomy kompromis: informacja o blokadzie
+     * potwierdza napastnikowi istnienie adresu, ale prawowity użytkownik musi wiedzieć, dlaczego
+     * poprawne hasło nie działa - bez tego zgłasza awarię zamiast poczekać na wygaśnięcie blokady.
      */
     @ExceptionHandler(LockedException.class)
     public ProblemDetail handleLocked(LockedException ex) {
@@ -102,17 +94,15 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     }
 
     /**
-     * Konto zablokowane przez ADMINISTRATORA - inny stan niż blokada po nieudanych
-     * logowaniach obsłużona wyżej.
+     * Konto zablokowane przez administratora - stan odrębny od blokady po nieudanych logowaniach.
      *
-     * Handler stoi obok handleLocked i wygrywa z nim, bo Spring wybiera metodę
-     * najbardziej szczegółową, a AccountBlockedException dziedziczy po LockedException.
-     * To dziedziczenie jest tu fail-safe: gdyby ten handler kiedyś zniknął, odpowiedź
-     * spadnie do 423 ACCOUNT_LOCKED zamiast do 500 - użytkownik dostanie gorszy komunikat,
-     * ale konto pozostanie zamknięte.
+     * Handler wygrywa z handlerem powyżej, ponieważ Spring wybiera metodę najbardziej szczegółową,
+     * a ten wyjątek dziedziczy po LockedException. Dziedziczenie pełni tu rolę zabezpieczenia:
+     * gdyby ten handler zniknął, odpowiedzią byłoby 423 ACCOUNT_LOCKED zamiast 500, więc
+     * użytkownik dostałby gorszy komunikat, ale konto pozostałoby zamknięte.
      *
-     * Kod ACCOUNT_BLOCKED musi być odrębny od ACCOUNT_LOCKED, bo front rozgałęzia się po
-     * nim: blokada administracyjna nie mija sama i nie ma sensu radzić "spróbuj później".
+     * Osobny kod maszynowy jest konieczny, bo frontend się po nim rozgałęzia: blokada
+     * administracyjna nie mija samoczynnie, więc rada "spróbuj później" byłaby nieprawdziwa.
      */
     @ExceptionHandler(AccountBlockedException.class)
     public ProblemDetail handleAccountBlocked(AccountBlockedException ex) {
@@ -122,6 +112,7 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
                 "ACCOUNT_BLOCKED");
     }
 
+    /** Panel administracyjny: konto o podanym identyfikatorze nie istnieje. */
     @ExceptionHandler(AdminUserNotFoundException.class)
     public ProblemDetail handleAdminUserNotFound(AdminUserNotFoundException ex) {
         log.warn("Panel administracyjny: nie znaleziono konta o podanym id");
@@ -130,10 +121,12 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     }
 
     /**
-     * Akcja panelu odrzucona ze względu na stan systemu (blokada siebie, ostatni
-     * administrator). 409, bo żądanie jest poprawne - to sytuacja po stronie serwera
-     * czyni je niewykonalnym. Kod maszynowy przychodzi z wyjątku, bo przyczyny są dwie,
-     * a front komunikuje je inaczej.
+     * Akcja panelu odrzucona ze względu na stan systemu (operacja na własnym koncie, ostatni
+     * administrator).
+     *
+     * Status 409, ponieważ samo żądanie jest poprawne - niewykonalnym czyni je stan po stronie
+     * serwera. Kod maszynowy pochodzi z wyjątku, bo przyczyn jest kilka, a frontend komunikuje
+     * każdą inaczej.
      */
     @ExceptionHandler(AdminActionRejectedException.class)
     public ProblemDetail handleAdminActionRejected(AdminActionRejectedException ex) {
@@ -142,31 +135,37 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
                 ex.getMessage(), ex.getCode());
     }
 
+    /** Token z linku (potwierdzenie adresu, reset hasła) jest nieprawidłowy. */
     @ExceptionHandler(InvalidTokenException.class)
     public ProblemDetail handleInvalidToken(InvalidTokenException ex) {
         log.warn("Nieprawidłowy token: {}", ex.getMessage());
         return ApiProblem.of(HttpStatus.BAD_REQUEST, "Nieprawidłowy token", ex.getMessage(), "INVALID_TOKEN");
     }
 
+    /** Token z linku był poprawny, ale minął jego termin ważności. */
     @ExceptionHandler(TokenExpiredException.class)
     public ProblemDetail handleTokenExpired(TokenExpiredException ex) {
         log.warn("Token wygasł: {}", ex.getMessage());
         return ApiProblem.of(HttpStatus.GONE, "Token wygasł", ex.getMessage(), "TOKEN_EXPIRED");
     }
 
+    /**
+     * Błąd tokenu JWT. Kod maszynowy z wyjątku trafia wprost do odpowiedzi, dzięki czemu
+     * frontend odróżnia sytuację wymagającą odświeżenia sesji od wymagającej wylogowania.
+     */
     @ExceptionHandler(JwtAuthenticationException.class)
     public ProblemDetail handleJwtAuthentication(JwtAuthenticationException ex) {
         log.warn("Błąd JWT: {} - {}", ex.getTokenError(), ex.getMessage());
-        // Maszynowy kod z wyjątku (EXPIRED_TOKEN / INVALID_TOKEN / INVALID_TOKEN_TYPE)
-        // trafia wprost do pola "code", więc frontend wie, czy odświeżyć token, czy wylogować.
         return ApiProblem.of(HttpStatus.UNAUTHORIZED, "Błąd uwierzytelnienia",
                 ex.getMessage(), ex.getTokenError());
     }
 
     /**
-     * Rzucane przez zabezpieczenia na poziomie metod (@PreAuthorize).
-     * Odmowy z filtrów Spring Security nie docierają tutaj - obsługuje je RestAccessDeniedHandler.
-     * Bez tej metody wyjątek wpadłby w fallback poniżej i wrócił jako 500 zamiast 403.
+     * Odmowa dostępu zgłoszona przez zabezpieczenia na poziomie metod.
+     *
+     * Odmowy pochodzące z filtrów Spring Security tutaj nie docierają - obsługuje je
+     * RestAccessDeniedHandler. Bez tej metody wyjątek wpadłby w handler ogólny i wrócił jako
+     * 500 zamiast 403.
      */
     @ExceptionHandler(AccessDeniedException.class)
     public ProblemDetail handleAccessDenied(AccessDeniedException ex) {
@@ -176,8 +175,8 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     }
 
     /**
-     * Wgrany plik nie nadaje się do tłumaczenia (pusty, złe rozszerzenie, złe kodowanie).
-     * Kod maszynowy przychodzi z wyjątku, bo przyczyny są trzy, a odpowiedź jedna.
+     * Wgrany plik nie nadaje się do tłumaczenia (pusty, nieobsługiwany format, złe kodowanie).
+     * Kod maszynowy pochodzi z wyjątku, bo przyczyn jest kilka, a odpowiedź jedna.
      */
     @ExceptionHandler(InvalidUploadException.class)
     public ProblemDetail handleInvalidUpload(InvalidUploadException ex) {
@@ -186,18 +185,19 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
                 ex.getMessage(), ex.getCode());
     }
 
+    /** Zlecenie nie istnieje albo należy do kogoś innego - z zewnątrz nierozróżnialne. */
     @ExceptionHandler(TranslationJobNotFoundException.class)
     public ProblemDetail handleTranslationJobNotFound(TranslationJobNotFoundException ex) {
-        // Świadomie nie logujemy id: ta sama odpowiedź należy się zleceniu nieistniejącemu
-        // i cudzemu, a rozróżnienie ich w logu zachęca do rozróżnienia ich w odpowiedzi.
+        // Identyfikator nie trafia do logu: ta sama odpowiedź należy się zleceniu nieistniejącemu
+        // i cudzemu, a rozróżnianie ich w logu zachęca do rozróżnienia ich w odpowiedzi.
         log.warn("Nie znaleziono zlecenia tłumaczenia dla bieżącego użytkownika");
         return ApiProblem.of(HttpStatus.NOT_FOUND, "Nie znaleziono",
                 ex.getMessage(), "TRANSLATION_JOB_NOT_FOUND");
     }
 
     /**
-     * Zlecenie istnieje, ale nie ma jeszcze wyniku. Status wraca w ciele, bo tylko on
-     * mówi frontendowi, czy odpytywać dalej (PENDING/PROCESSING), czy przestać (FAILED).
+     * Zlecenie istnieje, ale nie ma jeszcze wyniku. Status trafia do ciała odpowiedzi, ponieważ
+     * tylko on mówi frontendowi, czy odpytywać dalej, czy przestać.
      */
     @ExceptionHandler(TranslationNotReadyException.class)
     public ProblemDetail handleTranslationNotReady(TranslationNotReadyException ex) {
@@ -208,17 +208,16 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     }
 
     /**
-     * Wiersz zlecenia jest, ale jego pliku nie ma już w magazynie obiektowym.
+     * Wiersz zlecenia istnieje, ale jego pliku nie ma już w magazynie obiektowym.
      *
-     * 410 GONE, a nie 404 ani 500, i każda z tych trzech odpowiedzi znaczyłaby co innego:
-     * 404 kłamałoby, bo zlecenie istnieje i widać je na liście; 500 sugerowałoby awarię
-     * do zgłoszenia, a to jest stan przewidziany.
+     * Status 410, a nie 404 ani 500: odpowiedź 404 byłaby nieprawdą, bo zlecenie istnieje i widać
+     * je na liście, a 500 sugerowałoby awarię do zgłoszenia, podczas gdy jest to stan przewidziany.
      *
-     * Ten stan jest ceną za to, że retencja żyje w DWÓCH miejscach: wiersze kasuje
-     * TranslationCleanupJob według app.translation.retention, a pliki - reguła wygasania
-     * na kubełku. Nic tych dwóch wartości nie wiąże poza uważnością, więc rozjazd musi mieć
-     * objaw, po którym da się go rozpoznać. Powtarzające się CONTENT_EXPIRED przy zleceniach
-     * młodszych niż retencja znaczy dokładnie jedno: reguła na kubełku kasuje za wcześnie.
+     * Sytuacja wynika z tego, że retencja działa w dwóch miejscach - wiersze kasuje zadanie
+     * aplikacji, pliki reguła wygasania na kubełku - a obie wartości wiąże wyłącznie uważność.
+     * Osobny kod odpowiedzi daje rozjazdowi tych wartości rozpoznawalny objaw: powtarzające się
+     * odpowiedzi tego rodzaju dla zleceń młodszych niż retencja oznaczają, że reguła na kubełku
+     * kasuje pliki za wcześnie.
      */
     @ExceptionHandler(ObjectMissingException.class)
     public ProblemDetail handleObjectMissing(ObjectMissingException ex) {
@@ -228,6 +227,7 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
                 "Plik nie jest już przechowywany - zleć tłumaczenie ponownie", "CONTENT_EXPIRED");
     }
 
+    /** Wyczerpany dobowy limit znaków. Pozostały budżet wraca w ciele, żeby dało się go pokazać. */
     @ExceptionHandler(TranslationQuotaExceededException.class)
     public ProblemDetail handleTranslationQuota(TranslationQuotaExceededException ex) {
         ProblemDetail problem = ApiProblem.of(HttpStatus.TOO_MANY_REQUESTS, "Limit wyczerpany",
@@ -237,8 +237,8 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     }
 
     /**
-     * Siatka bezpieczeństwa na naruszenia więzów bazy (np. wyścig przy równoczesnej
-     * rejestracji tego samego emaila, którego nie złapie wcześniejsze sprawdzenie).
+     * Siatka bezpieczeństwa na naruszenia więzów bazy - na przykład wyścig przy równoczesnej
+     * rejestracji tego samego adresu, którego nie wychwyci wcześniejsze sprawdzenie.
      */
     @ExceptionHandler(DataIntegrityViolationException.class)
     public ProblemDetail handleDataIntegrity(DataIntegrityViolationException ex) {
@@ -248,36 +248,33 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     }
 
     /**
-     * Nazwa naruszonego więzu, a NIE komunikat sterownika.
+     * Wydobywa nazwę naruszonego więzu - świadomie zamiast komunikatu sterownika.
      *
-     * Komunikat sterownika niesie wartość, która kolizję wywołała, i dotyczy to każdego
-     * silnika: PostgreSQL pisze "Key (email)=(ktos@example.com) already exists", MySQL pisał
-     * "Duplicate entry 'ktos@example.com' for key 'users.email'". Najczęstszym wyzwalaczem
-     * tego handlera jest właśnie wyścig przy rejestracji na ten sam adres, więc logowanie
-     * komunikatu wprost wpisywałoby adresy użytkowników do logu produkcyjnego - poziom WARN
-     * przechodzi przez prodowy próg. Nazwa więzu mówi diagnostycznie dokładnie tyle samo
-     * ("wiadomo, który unikat pękł") i nie zawiera danych osobowych.
+     * Komunikat sterownika zawiera wartość, która wywołała kolizję, i dotyczy to każdego silnika
+     * bazy. Najczęstszym wyzwalaczem tego handlera jest wyścig przy rejestracji na ten sam adres,
+     * więc logowanie komunikatu wprost wpisywałoby adresy użytkowników do logu produkcyjnego.
+     * Nazwa więzu niesie tę samą wartość diagnostyczną i nie zawiera danych osobowych.
      */
     private String constraintOf(DataIntegrityViolationException ex) {
-        // Przejście po całym łańcuchu, a nie getMostSpecificCause(): ta metoda schodzi do
-        // NAJGŁĘBSZEJ przyczyny, czyli do SQLException sterownika, a ConstraintViolationException
-        // Hibernate'a siedzi piętro wyżej. Sprawdzenie samego "najbardziej szczegółowego"
-        // nigdy by go nie znalazło - i logowałoby dokładnie ten komunikat, którego tu unikamy.
+        // Przejście po całym łańcuchu przyczyn zamiast getMostSpecificCause(): tamta metoda
+        // schodzi do najgłębszego wyjątku, czyli do wyjątku sterownika, a wyjątek Hibernate'a
+        // niosący nazwę więzu znajduje się piętro wyżej.
         for (Throwable cause = ex; cause != null; cause = cause.getCause()) {
             if (cause instanceof ConstraintViolationException violation
                     && violation.getConstraintName() != null) {
                 return violation.getConstraintName();
             }
         }
-        // Nieznany więz - zostaje sam typ przyczyny. Świadomie mniej informacji niż
-        // w komunikacie: przy nierozpoznanym błędzie nie wiadomo, co ten komunikat niesie.
+        // Nierozpoznany więz - zostaje sam typ przyczyny. Świadomie mniej informacji niż
+        // w komunikacie, bo przy nieznanym błędzie nie wiadomo, co ten komunikat zawiera.
         return ex.getMostSpecificCause().getClass().getSimpleName();
     }
 
     /**
-     * Błędy walidacji @Valid na ciele żądania.
-     * Zwracamy listę błędów per pole zamiast sklejonego stringa - frontend może
-     * podświetlić konkretne pola formularza zamiast wyświetlać jeden zlepek tekstu.
+     * Błędy walidacji ciała żądania.
+     *
+     * Odpowiedź niesie listę błędów w rozbiciu na pola, a nie sklejony tekst, dzięki czemu
+     * frontend podświetla konkretne pola formularza zamiast wyświetlać jeden komunikat zbiorczy.
      */
     @Override
     protected ResponseEntity<Object> handleMethodArgumentNotValid(MethodArgumentNotValidException ex,
@@ -301,15 +298,15 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     }
 
     /**
-     * Przekroczony rozmiar wgrywanego pliku. Rzucane przy parsowaniu multiparta, czyli
-     * PRZED wejściem do kontrolera - dlatego nie da się tego sprawdzić w walidacji uploadu.
+     * Przekroczony rozmiar wgrywanego pliku. Wyjątek powstaje przy parsowaniu multiparta, czyli
+     * przed wejściem do kontrolera - dlatego tego przypadku nie da się obsłużyć w walidacji uploadu.
      *
-     * NADPISANIE metody bazowej, a nie własny @ExceptionHandler: ResponseEntityExceptionHandler
-     * sam deklaruje obsługę tego wyjątku, więc drugie mapowanie na ten sam typ wywala
-     * kontekst przy starcie ("Ambiguous @ExceptionHandler method mapped for..."). Ta sama
-     * pułapka czeka przy każdym wyjątku, który Spring MVC już zna.
+     * Metoda bazowa jest nadpisana zamiast dodania własnego handlera, ponieważ
+     * ResponseEntityExceptionHandler sam deklaruje obsługę tego wyjątku, a drugie mapowanie na ten
+     * sam typ przerywa start aplikacji komunikatem o niejednoznacznym handlerze. Ta sama zasada
+     * obowiązuje przy każdym wyjątku, który Spring MVC już zna.
      *
-     * 413, a nie 400: klient ma wiedzieć, że problem jest w rozmiarze, a nie w treści.
+     * Status 413 zamiast 400 informuje klienta, że problemem jest rozmiar, a nie treść.
      */
     @Override
     protected ResponseEntity<Object> handleMaxUploadSizeExceededException(MaxUploadSizeExceededException ex,
@@ -325,10 +322,10 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     /**
      * Parametr żądania nie dał się przekonwertować na oczekiwany typ.
      *
-     * Nadpisane głównie dla targetLang: domyślna odpowiedź Springa mówi "nieprawidłowa
-     * wartość" i nie zdradza, co wolno podać, więc użytkownik musi zgadywać albo szukać
-     * w dokumentacji. Przy typie wyliczeniowym lista dopuszczalnych wartości jest znana
-     * z definicji - nie ma powodu jej ukrywać.
+     * Nadpisanie służy przede wszystkim językowi docelowemu: domyślna odpowiedź informuje
+     * o nieprawidłowej wartości, ale nie podaje, co wolno podać, więc użytkownik musi zgadywać.
+     * Przy typie wyliczeniowym lista dopuszczalnych wartości jest znana z definicji i trafia
+     * do odpowiedzi.
      */
     @Override
     protected ResponseEntity<Object> handleTypeMismatch(TypeMismatchException ex,
@@ -347,9 +344,11 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     }
 
     /**
-     * Ostatnia linia obrony. Szczegóły lądują w logach, do klienta idzie ogólny komunikat -
-     * stack trace czy komunikat z bazy w odpowiedzi HTTP to wyciek informacji o systemie.
-     * Powiązanie odpowiedzi z logiem daje traceId dokładany przez ApiProblem.
+     * Handler ogólny - ostatnia linia obrony.
+     *
+     * Szczegóły trafiają do logów, a do klienta idzie komunikat ogólny: ślad stosu czy komunikat
+     * bazy w odpowiedzi HTTP byłyby wyciekiem informacji o systemie. Powiązanie odpowiedzi
+     * z wpisem w logu zapewnia identyfikator żądania dokładany przez ApiProblem.
      */
     @ExceptionHandler(Exception.class)
     public ProblemDetail handleGeneric(Exception ex) {

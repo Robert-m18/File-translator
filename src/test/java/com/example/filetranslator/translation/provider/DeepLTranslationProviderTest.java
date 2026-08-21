@@ -207,7 +207,7 @@ class DeepLTranslationProviderTest {
     }
 
     /**
-     * Fail-fast na brakującym kluczu. Sprawdzamy też literał "${...}", bo NIEUSTAWIONA
+     * Zatrzymanie startu przy brakującym kluczu. Sprawdzany jest też literał symbolu zastępczego, bo nieustawiona
      * zmienna środowiskowa binduje się właśnie tak - @ConfigurationProperties nie zgłasza
      * nierozwiązanego placeholdera (udokumentowana pułapka AdminProperties).
      */

@@ -29,12 +29,15 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import java.io.IOException;
 
 /**
- * Waliduje JWT z ciasteczka "accessToken" i ustawia kontekst bezpieczeństwa.
+ * Uwierzytelnia żądanie na podstawie tokenu JWT z ciasteczka i ustawia kontekst bezpieczeństwa.
  *
- * Uwaga na rejestrację tego filtra: NIE jest oznaczony @Component, tylko tworzony jako
- * @Bean w SecurityConfig. Filtr będący @Component Spring Boot rejestruje dodatkowo
- * w kontenerze serwletów, przez co działałby również poza łańcuchem Spring Security -
- * także na ścieżkach, których świadomie z niego wyłączyliśmy.
+ * Token czytany jest wyłącznie z ciasteczka httpOnly, nigdy z nagłówka Authorization, dzięki
+ * czemu pozostaje niedostępny dla JavaScriptu w przeglądarce.
+ *
+ * Filtr nie jest oznaczony adnotacją komponentu - powstaje jako bean w konfiguracji
+ * bezpieczeństwa. Filtr będący komponentem zostałby dodatkowo zarejestrowany w kontenerze
+ * serwletów i działał również poza łańcuchem Spring Security, także na ścieżkach świadomie z niego
+ * wyłączonych.
  */
 @Slf4j
 @RequiredArgsConstructor
@@ -50,51 +53,41 @@ public class JwtFilter extends OncePerRequestFilter {
                                     FilterChain filterChain)
             throws ServletException, IOException {
 
-        // 1. Szukamy tokena w ciasteczku
         String token = extractTokenFromCookies(request);
 
-        // Brak tokena to nie błąd - request leci dalej jako anonimowy.
-        // O tym, czy dany endpoint wymaga zalogowania, decyduje konfiguracja autoryzacji,
-        // a odpowiedź 401 wystawi RestAuthenticationEntryPoint.
+        // Brak tokenu nie jest błędem - żądanie leci dalej jako anonimowe. O tym, czy endpoint
+        // wymaga zalogowania, decyduje konfiguracja autoryzacji, a odpowiedź 401 wystawia punkt
+        // wejścia uwierzytelniania.
         if (token == null) {
             filterChain.doFilter(request, response);
             return;
         }
 
         try {
-            // 2. Parsujemy token - rzuca wyjątek, jeśli nieważny albo wygasły
+            // Parsowanie tokenu rzuca wyjątek przy niepoprawnym podpisie i po terminie ważności.
             String username = jwtUtil.extractUsername(token);
 
             /*
-             * 2a. Token musi być typu "access". Sam poprawny podpis nie wystarcza, bo token
-             * ODŚWIEŻAJĄCY jest podpisany tym samym kluczem - podstawiony w ciasteczko
-             * accessToken przechodziłby tędy jako pełnoprawne uwierzytelnienie.
+             * Token musi być typu dostępowego. Sam poprawny podpis nie wystarcza, ponieważ token
+             * odświeżający jest podpisany tym samym kluczem i podstawiony w to ciasteczko
+             * przechodziłby tędy jako pełnoprawne uwierzytelnienie.
              *
-             * To nie jest teoretyczne: token odświeżający żyje 7 dni, a ten filtr nie
-             * sprawdza stanu SESJI. Unieważnianie sesji działa na rodzinach tokenów
-             * odświeżających sprawdzanych w AuthService.refreshToken, więc bez tego
-             * sprawdzenia WYLOGOWANA sesja otwierałaby chronione endpointy jeszcze przez
-             * tydzień. AuthService robi kontrolę lustrzaną w drugą stronę (odsiewa access
-             * token podstawiony pod /auth/refresh) - tutaj brakowało jej od zawsze.
+             * Ma to znaczenie praktyczne: token odświeżający żyje siedem dni, a ten filtr nie
+             * sprawdza stanu sesji, więc bez tej kontroli wylogowana sesja otwierałaby chronione
+             * endpointy przez cały tydzień. Kontrola lustrzana - odsianie tokenu dostępowego
+             * podstawionego pod odświeżanie sesji - znajduje się w AuthService.
              */
             if (!"access".equals(jwtUtil.extractTokenType(token))) {
                 throw new JwtAuthenticationException("Nieprawidłowy typ tokenu", "INVALID_TOKEN_TYPE");
             }
 
             /*
-             * 3. Podstawiamy użytkownika, o ile nikt wcześniej nie uwierzytelnił żądania
-             * naprawdę. Uwierzytelnienie ANONIMOWE trzeba tu wyraźnie potraktować jak jego
-             * brak, bo ten filtr stoi ZA AnonymousAuthenticationFilter (patrz uzasadnienie
-             * pozycji w SecurityConfig) - w kontekście siedzi więc już AnonymousAuthenticationToken
-             * i sam warunek "getAuthentication() == null" nie jest spełniony NIGDY.
-             *
-             * Skutek był taki, że poprawny token nie otwierał niczego: filtr parsował go bez
-             * błędu, po czym przepuszczał żądanie dalej jako anonimowe, a AuthorizationFilter
-             * odsyłał 401 z kodem UNAUTHENTICATED. Objaw mylący - wygląda jak zły token,
-             * a token jest w porządku.
-             *
-             * Testy jednostkowe tego nie łapią, bo wołają filtr poza łańcuchem, gdzie kontekst
-             * faktycznie jest pusty. Pilnuje tego CurrentUserTest, idący przez cały łańcuch.
+             * Uwierzytelnienie podstawiane jest tylko wtedy, gdy żądanie nie zostało jeszcze
+             * uwierzytelnione naprawdę. Uwierzytelnienie anonimowe trzeba tu traktować jak jego
+             * brak, ponieważ filtr stoi za filtrem anonimowym (pozycja wymuszona przez ochronę
+             * CSRF), więc w kontekście znajduje się już token anonimowy i sam warunek pustego
+             * kontekstu nie byłby spełniony nigdy. Poprawny token nie otwierałby wtedy niczego:
+             * filtr parsowałby go bez błędu, po czym przepuszczał żądanie dalej jako anonimowe.
              */
             Authentication existing = SecurityContextHolder.getContext().getAuthentication();
             boolean alreadyAuthenticated =
@@ -104,35 +97,24 @@ public class JwtFilter extends OncePerRequestFilter {
                 UserDetails userDetails = userDetailsService.loadUserByUsername(username);
 
                 /*
-                 * 3a. Konto zablokowane przez administratora nie przechodzi dalej, choćby
-                 * token był bez zarzutu. Blokada ma działać NATYCHMIAST, a nie po wygaśnięciu
-                 * żywego tokenu dostępowego - inaczej zablokowany pracowałby jeszcze przez
-                 * 15 minut. To jedyne miejsce, w którym da się to domknąć, i wolno tu było
-                 * dołożyć sprawdzenie tylko dlatego, że wiersz użytkownika i tak jest już
-                 * w ręku: loadUserByUsername wyżej czyta go z bazy przy KAŻDYM
-                 * uwierzytelnionym żądaniu. Koszt wynosi zero zapytań.
+                 * Konto zablokowane przez administratora nie przechodzi dalej, choćby token był
+                 * bez zarzutu. Dzięki temu blokada działa natychmiast, a nie dopiero po wygaśnięciu
+                 * żywego tokenu dostępowego. Kontrola nie kosztuje dodatkowego zapytania, bo wiersz
+                 * użytkownika jest już wczytany - odczyt wykonuje się przy każdym uwierzytelnionym
+                 * żądaniu.
                  *
-                 * SPRAWDZAMY WYŁĄCZNIE isBlocked(), NIGDY isAccountNonLocked(). Ta druga
-                 * obejmuje także blokadę po nieudanych logowaniach, a tę wywołuje KAŻDY,
-                 * kto zna czyjś adres i wpisze kilka razy złe hasło. Ogólne sprawdzenie
-                 * zamieniłoby więc automatyczną blokadę w narzędzie do wybijania dowolnego
-                 * zalogowanego użytkownika z aplikacji. Kontrola negatywna:
-                 * AdminPanelTest.failedLoginLockout_shouldNotKillLiveSession.
-                 *
-                 * JwtFilterTest tej gałęzi nie pokryje - mockuje loadUserByUsername na
-                 * org.springframework.security.core.userdetails.User, więc instanceof naszej
-                 * encji jest tam fałszywy i test przechodzi niezależnie od tej linii.
-                 * Ta sama sytuacja co CurrentUserTest kontra JwtFilterTest.
+                 * Sprawdzana jest wyłącznie blokada administracyjna, nigdy ogólny stan konta:
+                 * ogólne sprawdzenie objęłoby także blokadę po nieudanych logowaniach, którą może
+                 * wywołać każdy, kto zna cudzy adres i kilka razy poda złe hasło. Byłoby to
+                 * narzędzie do wyrzucania dowolnego zalogowanego użytkownika z aplikacji.
                  */
                 if (userDetails instanceof User user && user.isBlocked()) {
                     throw new JwtAuthenticationException(
                             "Konto zostało zablokowane przez administratora", "ACCOUNT_BLOCKED");
                 }
 
-                // Bez adresu email w treści - to dana osobowa, a ten log wykonuje się teraz
-                // przy KAŻDYM żądaniu zalogowanego użytkownika (wcześniej ścieżka sukcesu tego
-                // filtra nie wykonywała się w ogóle, więc naruszenie było uśpione).
-                // Powiązanie z konkretną osobą daje traceId, wspólny dla całego żądania.
+                // Bez adresu w treści - to dana osobowa, a ten wpis powstaje przy każdym żądaniu
+                // zalogowanego użytkownika. Powiązanie z konkretną osobą daje identyfikator żądania.
                 log.debug("Token JWT zweryfikowany, uwierzytelnienie ustawione");
 
                 UsernamePasswordAuthenticationToken authToken =
@@ -152,20 +134,14 @@ public class JwtFilter extends OncePerRequestFilter {
             rejectRequest(response, ex.getMessage(), ex.getTokenError());
         } catch (UsernameNotFoundException ex) {
             /*
-             * Token poprawny, ale konta już nie ma - administrator skasował je w trakcie
-             * pracy użytkownika. Bez tej gałęzi wpadało to do generycznego catch niżej,
-             * czyli do 401 TOKEN_PROCESSING_ERROR: kodu, na którym front się NIE rozgałęzia,
-             * więc zamiast wrócić na ekran logowania pokazywał "Błąd przy przetwarzaniu
-             * tokena" przy każdym kliknięciu - zdanie o wewnętrznej awarii w sytuacji,
-             * w której nic się nie zepsuło.
+             * Token jest poprawny, ale konta już nie ma - zostało skasowane w trakcie pracy
+             * użytkownika. Bez tej gałęzi przypadek wpadał do obsługi ogólnej i dawał kod błędu
+             * przetwarzania tokenu, na którym frontend się nie rozgałęzia, więc zamiast wrócić na
+             * ekran logowania pokazywałby komunikat o wewnętrznej awarii przy każdym kliknięciu.
              *
-             * UNAUTHENTICATED, czyli ten sam kod co żądanie bez ciasteczka, jest tu prawdą:
-             * token wskazuje kogoś, kogo nie ma. Front spróbuje po cichu odświeżyć sesję
-             * (tokeny odświeżające zniknęły z kaskadą, więc odbije się o 401) i przejdzie
-             * na ekran logowania - dokładnie to, co ma się stać.
-             *
-             * Rejestrujemy na poziomie WARN bez adresu: id nie ma już skąd wziąć, a traceId
-             * wystarczy do skorelowania z logiem usunięcia konta.
+             * Kod odpowiedzi jest ten sam co dla żądania bez ciasteczka i jest to zgodne ze stanem
+             * faktycznym: token wskazuje kogoś, kogo nie ma. Frontend spróbuje po cichu odświeżyć
+             * sesję, odbije się od braku tokenów odświeżających i przejdzie na ekran logowania.
              */
             log.warn("Token wskazuje konto, którego już nie ma");
             rejectRequest(response, "Sesja wygasła. Zaloguj się ponownie.", "UNAUTHENTICATED");
@@ -188,9 +164,10 @@ public class JwtFilter extends OncePerRequestFilter {
         return null;
     }
 
+    /** Odrzuca żądanie odpowiedzią w formacie ProblemDetail, spójną z resztą błędów API. */
     private void rejectRequest(HttpServletResponse response, String detail, String code) throws IOException {
-        // Kontekst czyszczony jawnie: wątek pochodzi z puli i mógłby nieść
-        // uwierzytelnienie pozostałe po wcześniejszym żądaniu.
+        // Kontekst czyszczony jawnie: wątek pochodzi z puli i mógłby nieść uwierzytelnienie
+        // pozostałe po wcześniejszym żądaniu.
         SecurityContextHolder.clearContext();
 
         problemWriter.write(response, ApiProblem.of(
