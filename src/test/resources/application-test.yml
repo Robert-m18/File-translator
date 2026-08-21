@@ -13,33 +13,6 @@
 # w samych changelogach - zamiast maskować je autogeneracją schematu.
 
 spring:
-  # ATRAPOWY klient OAuth2 - żeby logowanie przez Google BYŁO WPIĘTE w łańcuch w każdym
-  # kontekście testowym. Bez tego bean ClientRegistrationRepository nie powstaje,
-  # SecurityConfig pomija oauth2Login i cała ta gałąź konfiguracji nie wykonuje się ani razu.
-  #
-  # W application-test.yml, a NIE w @TestPropertySource pojedynczej klasy, i to jest
-  # świadome z dwóch powodów:
-  #
-  #  1. @TestPropertySource rozbija klucz cache'a kontekstów, czyli dokłada JEDEN kontekst
-  #     z własną pulą połączeń. Próg max_connections PostgreSQL-a został tu już raz
-  #     przekroczony przez dołożenie jednej klasy testowej - patrz komentarz przy puli niżej.
-  #  2. Wpięcie oauth2Login potrafi PODMIENIĆ punkt wejścia uwierzytelnienia na
-  #     przekierowanie do dostawcy. Gdyby tak się stało, chronione ścieżki oddawałyby
-  #     302 zamiast 401 ProblemDetail. Skoro klient jest wpięty we WSZYSTKICH kontekstach,
-  #     pilnuje tego cała reszta suite (SessionLifecycleTest, ApiContractTest), a nie
-  #     jeden test napisany specjalnie w tym celu.
-  #
-  # Wartości są jawnie fałszywe i nic nimi nie wychodzi na zewnątrz: "google" jest
-  # dostawcą znanym Springowi z wbudowanego CommonOAuth2Provider, więc adresy końcówek
-  # są zaszyte w bibliotece i start NIE wykonuje żadnego zapytania do sieci (odpytywanie
-  # dokumentu discovery włącza dopiero issuer-uri, którego tu nie ma).
-  security:
-    oauth2:
-      client:
-        registration:
-          google:
-            client-id: test-client-id
-            client-secret: test-client-secret
   datasource:
     # MODE=PostgreSQL, bo produkcja i dev chodzą na PostgreSQL - tryb zgodności ma
     # naśladować silnik docelowy, inaczej testy sprawdzają zachowanie, którego nigdzie
@@ -125,6 +98,28 @@ app:
   cookie:
     secure: false
     same-site: Lax
+  # ATRAPOWY klient OAuth2 - żeby logowanie przez Google BYŁO WPIĘTE w łańcuch w każdym
+  # kontekście testowym. Bez tego rejestracja nie powstaje, SecurityConfig pomija
+  # oauth2Login i cała ta gałąź konfiguracji nie wykonuje się ani razu.
+  #
+  # W application-test.yml, a NIE w @TestPropertySource pojedynczej klasy: @TestPropertySource
+  # rozbija klucz cache'a kontekstów, czyli dokłada JEDEN kontekst z własną pulą połączeń
+  # (próg max_connections został tu już raz przekroczony - patrz komentarz przy puli wyżej).
+  # Skoro klient jest wpięty we WSZYSTKICH kontekstach, cała reszta suite pilnuje przy
+  # okazji, że oauth2Login nie podmienił punktu wejścia uwierzytelnienia na przekierowanie
+  # do dostawcy - inaczej chronione ścieżki oddawałyby 302 zamiast 401 ProblemDetail.
+  #
+  # UWAGA, TO JEST DOKŁADNIE TA ŚLEPOTA, KTÓRA PRZEPUŚCIŁA AWARIĘ 2026-08-20: skoro tutaj
+  # zawsze stoją poprawne wartości, ścieżka "bez skonfigurowanego klienta" nie wykonywała
+  # się w testach ANI RAZU, a to właśnie ona kładła kontener. Pilnuje jej teraz
+  # GoogleLoginDisabledTest, który zeruje te wartości u siebie - i tylko dlatego coś sprawdza.
+  #
+  # Wartości są jawnie fałszywe i nic nimi nie wychodzi na zewnątrz: adresy końcówek Google
+  # są zaszyte w CommonOAuth2Provider, więc start NIE wykonuje żadnego zapytania do sieci.
+  oauth2:
+    google:
+      client-id: test-client-id
+      client-secret: test-client-secret
   # Domyślnie wyłączone: limit jest stanowy i przechodziłby między testami w tej samej
   # instancji JVM, przez co wynik zależałby od kolejności wykonania. Testy, które
   # sprawdzają sam limiter, włączają go u siebie przez @TestPropertySource.

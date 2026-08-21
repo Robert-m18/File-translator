@@ -7,31 +7,6 @@ spring:
     name: file-translator
   profiles:
     active: "${SPRING_PROFILES_ACTIVE:dev}"
-  security:
-    oauth2:
-      client:
-        registration:
-          google:
-            # UWAGA: pusta wartość NIE oznacza dla Spring Boota braku rejestracji, tylko
-            # rejestrację nieprawidłową. Wiązanie ustawień klienta OAuth2 wywołuje własną
-            # walidację, która przy pustym identyfikatorze przerywa start całego kontekstu
-            # komunikatem "Client id of registration 'google' must not be empty".
-            #
-            # W praktyce znaczy to, że uruchomienie aplikacji bez zmiennych GOOGLE_CLIENT_ID
-            # i GOOGLE_CLIENT_SECRET kończy się niewstaniem aplikacji, a nie wyłączeniem
-            # samego logowania przez Google. Docelowo rejestracja powinna powstawać
-            # warunkowo we własnej konfiguracji, poza tym blokiem, żeby brak kluczy dawał
-            # aplikację z mniejszą liczbą funkcji zamiast martwej - tak jak brak klucza
-            # dostawcy tłumaczenia daje atrapę zamiast błędu startu.
-            client-id: "${GOOGLE_CLIENT_ID:}"
-            client-secret: "${GOOGLE_CLIENT_SECRET:}"
-            # openid daje "sub", email daje adres RAZEM z email_verified (bez którego
-            # nie wpuszczamy nikogo), profile daje nazwę do wyświetlenia. Nic ponadto -
-            # zakres, o który się nie prosi, nie może wyciec.
-            scope:
-              - openid
-              - email
-              - profile
   task:
     scheduling:
       # Domyślnie harmonogram ma jeden wątek, a zadań jest pięć: trzy nocne sprzątania
@@ -97,6 +72,19 @@ app:
   # originem używanym też przez CORS i przy sklejaniu linków w mailach. Sklejenie obu
   # w jedno oznaczałoby, że zmiana trasy logowania na froncie rusza konfigurację CORS.
   oauth2:
+    # Dane klienta z Google Cloud Console. Wartości puste oznaczają wyłączone logowanie przez
+    # Google, z ostrzeżeniem przy starcie; reszta uwierzytelniania działa bez zmian.
+    #
+    # Ustawienia leżą pod własnym prefiksem, a nie pod prefiksem klienta OAuth2 Spring
+    # Security, i to jest warunek powyższego zachowania. Zadeklarowana tam rejestracja
+    # z pustym identyfikatorem jest dla Springa rejestracją błędną, a nie nieobecną, więc
+    # walidacja ustawień przerywa start całego kontekstu. Samego yml-a nie da się zapisać
+    # warunkowo, dlatego rejestrację buduje osobna konfiguracja, powstająca tylko wtedy, gdy
+    # obie wartości są niepuste.
+    google:
+      client-id: "${GOOGLE_CLIENT_ID:}"
+      client-secret: "${GOOGLE_CLIENT_SECRET:}"
+
     # /dashboard, a nie "/", żeby trafić tam, gdzie ląduje logowanie hasłem
     # (Login.jsx: navigate('/dashboard')). "/" też by zadziałało - RequireAnonymous
     # odesłałoby zalogowanego dalej - ale kosztem dodatkowego przekierowania.

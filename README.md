@@ -278,7 +278,7 @@ przeglądarka po prostu by go nie odesłała.
 
 Bez `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` cała ta gałąź jest **wyłączona**, a aplikacja mówi
 o tym `WARN`-em przy starcie — rejestracja i logowanie hasłem działają bez niej. Adres powrotny
-trzeba wpisać w Google Cloud Console co do znaku (`http://localhost:8080/login/oauth2/code/google`
+trzeba wpisać w Google Cloud Console co do znaku (`http://localhost:2009/login/oauth2/code/google`
 dla uruchomienia lokalnego); niezgodność odbija się po stronie Google i nie zostawia śladu
 w naszych logach.
 
@@ -549,14 +549,14 @@ w usługi z `docker-compose.yml`, więc lokalnie nie trzeba ustawiać niczego.
 | `RATE_LIMIT_REDIS_URL` | zależnie | `redis://localhost:6379` | Wymagana przy `RATE_LIMIT_STORE=redis` |
 | `COOKIE_SECURE`, `COOKIE_SAME_SITE` | nie | `false` / `Strict` (na `prod` `true` / `None`) | Ciasteczka sesji |
 | `ADMIN_ENABLED`, `ADMIN_EMAIL`, `ADMIN_PASSWORD` | nie | wyłączone | Konto administratora zakładane przy starcie |
-| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | **tak** | puste | Klient OAuth2 — patrz ostrzeżenie niżej |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | nie | puste | Klient OAuth2 — bez nich logowanie kontem Google jest wyłączone |
 
-> **Uwaga do `GOOGLE_CLIENT_ID`.** Wbrew temu, co sugeruje pusta wartość domyślna, **aplikacja
-> bez tej zmiennej nie wstaje**. Spring Boot traktuje pusty identyfikator klienta nie jako brak
-> rejestracji, lecz jako rejestrację nieprawidłową, i przerywa start kontekstu komunikatem
-> `Client id of registration 'google' must not be empty`. Do czasu scalenia poprawki z gałęzi
-> `google-oauth2` obie zmienne trzeba ustawić także wtedy, gdy logowanie kontem Google nie jest
-> potrzebne (wystarczy dowolna niepusta wartość, żeby uruchomić resztę aplikacji).
+> **Logowanie przez Google jest opcjonalne.** Bez tych dwóch zmiennych aplikacja startuje
+> normalnie i wypisuje ostrzeżenie `Logowanie przez Google jest WYŁĄCZONE`, a ścieżka
+> `/oauth2/authorization/google` po prostu nie istnieje. Reszta uwierzytelniania — rejestracja,
+> logowanie hasłem, reset — działa bez zmian. Wymagane są **obie** wartości: klient
+> z identyfikatorem, ale bez sekretu, przeszedłby start i zawiódł dopiero po zalogowaniu się
+> użytkownika u dostawcy.
 
 Magazyn plików i dostawca tłumaczenia są na `prod` **przypięte na sztywno** (`app.storage.type=s3`,
 `app.translation.provider=deepl`) i nie da się ich przestawić zmienną. W profilu bazowym mają
