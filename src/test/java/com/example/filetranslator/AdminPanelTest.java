@@ -1,5 +1,10 @@
 package com.example.filetranslator;
 
+import com.example.filetranslator.translation.model.TargetLanguage;
+import com.example.filetranslator.translation.model.TranslationJob;
+import com.example.filetranslator.translation.repository.TranslationJobRepository;
+import com.example.filetranslator.translation.storage.ObjectKeys;
+import com.example.filetranslator.translation.storage.ObjectStore;
 import com.example.filetranslator.user.UserRepository;
 import com.example.filetranslator.user.model.Role;
 import com.example.filetranslator.user.model.User;
@@ -18,6 +23,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.ResultActions;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Arrays;
@@ -26,13 +32,14 @@ import java.util.List;
 import static com.example.filetranslator.TestTime.sql;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Panel administracyjny: przegląd kont i cztery akcje na nich.
+ * Panel administracyjny: przegląd kont i pięć akcji na nich.
  *
  * Testujemy przez PEŁNY łańcuch filtrów, nie na samym serwisie, bo połowa tej zmiany jest
  * właśnie w łańcuchu: reguła autoryzacji na /users/**, sprawdzenie blokady w JwtFilter
@@ -70,6 +77,17 @@ class AdminPanelTest {
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private TranslationJobRepository translationJobRepository;
+
+    /**
+     * Magazyn obiektów - w domyślnym przebiegu MinIO z kontenera, przy -Ph2 mapa w pamięci.
+     * Test 18 sprawdza przez ten sam port, którym pisze aplikacja, więc obie implementacje
+     * odpowiadają na to samo pytanie.
+     */
+    @Autowired
+    private ObjectStore objectStore;
 
     private Long adminId;
     private Long admin2Id;
@@ -404,6 +422,14 @@ class AdminPanelTest {
 
         block(user, adminId, "próba przejęcia")
                 .andExpect(status().isForbidden());
+
+        // DELETE dołożony do panelu później niż reszta - reguła obejmuje ścieżkę, nie metodę,
+        // ale asercja jest tania, a pomyłka w tym miejscu oddaje kasowanie kont każdemu
+        // zalogowanemu.
+        mockMvc.perform(delete("/users/{id}", adminId).with(csrf()).cookie(user))
+                .andExpect(status().isForbidden());
+
+        assertThat(userRepository.findById(adminId)).isPresent();
     }
 
     // ---------- 12-15: lista i wyszukiwanie ----------
@@ -555,11 +581,175 @@ class AdminPanelTest {
     @Test
     @DisplayName("Akcja na nieistniejącym koncie zwraca 404 USER_NOT_FOUND")
     void unknownUser_shouldReturn404() throws Exception {
-        List<Long> istniejace = List.of(adminId, admin2Id, userId);
-        long nieistniejace = istniejace.stream().mapToLong(Long::longValue).max().orElse(0) + 10_000;
+        long nieistniejace = unusedUserId();
 
         action(accessCookie(ADMIN_EMAIL), "unblock", nieistniejace)
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value("USER_NOT_FOUND"));
+
+        mockMvc.perform(delete("/users/{id}", nieistniejace)
+                        .with(csrf())
+                        .cookie(accessCookie(ADMIN_EMAIL)))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("USER_NOT_FOUND"));
+    }
+
+    // ---------- 18-21: usuwanie konta ----------
+
+    /**
+     * 18. Sedno kasowania: znika KONTO I WSZYSTKO, CO ZA NIM STOI.
+     *
+     * Cztery asercje zamiast jednej, bo każda pilnuje innego mechanizmu i każda mogłaby
+     * zawieść osobno: wiersz users (zapytanie JPQL), refresh_tokens i translation_jobs
+     * (kaskada po stronie bazy - Hibernate jej NIE zna, więc gdyby changeset zakładał klucz
+     * obcy bez ON DELETE CASCADE, kasowanie konta wywaliłoby się na naruszeniu więzów albo
+     * zostawiło osierocone wiersze) oraz plik w magazynie obiektowym, który z bazą nie ma
+     * wspólnej transakcji i wymaga osobnego wywołania.
+     *
+     * Plik jest tu najważniejszy: to jedyna część, której NIE załatwia żadna kaskada,
+     * a jednocześnie ta, dla której kasowanie konta w ogóle powstało. Bez wołania
+     * deleteAllFilesOf test jest czerwony wyłącznie na ostatniej linii - reszta przechodzi.
+     */
+    @Test
+    @DisplayName("18. Usunięcie konta kasuje sesje, zlecenia i pliki użytkownika")
+    void delete_shouldRemoveAccountWithAllItsData() throws Exception {
+        login(USER_EMAIL, PASSWORD); // zakłada wiersz w refresh_tokens
+        String objectKey = seedJobWithFile(userId);
+
+        assertThat(rowsOwnedBy("refresh_tokens", userId)).isPositive();
+        assertThat(rowsOwnedBy("translation_jobs", userId)).isPositive();
+        assertThat(objectStore.exists(objectKey)).isTrue();
+
+        mockMvc.perform(delete("/users/{id}", userId)
+                        .with(csrf())
+                        .cookie(accessCookie(ADMIN_EMAIL)))
+                .andExpect(status().isNoContent());
+
+        assertThat(userRepository.findByEmail(USER_EMAIL)).isEmpty();
+        assertThat(rowsOwnedBy("refresh_tokens", userId)).isZero();
+        assertThat(rowsOwnedBy("translation_jobs", userId)).isZero();
+        assertThat(objectStore.exists(objectKey)).isFalse();
+    }
+
+    /**
+     * 19. Skasowane konto przestaje działać NATYCHMIAST, także z żywym ciasteczkiem.
+     *
+     * Asercja idzie po KODZIE, nie po samym statusie, i to jest tu cała treść testu.
+     * Bez osobnej gałęzi na UsernameNotFoundException w JwtFilter odpowiedź też ma 401 -
+     * tyle że z kodem TOKEN_PROCESSING_ERROR, na którym front się nie rozgałęzia, więc
+     * użytkownik zostaje na ekranie z komunikatem o wewnętrznej awarii zamiast wrócić na
+     * logowanie. Sam status przepuściłby ten wariant bez mrugnięcia.
+     */
+    @Test
+    @DisplayName("19. Skasowane konto nie zaloguje się i traci żywą sesję")
+    void deletedUser_shouldLoseAccessImmediately() throws Exception {
+        Cookie live = accessCookie(USER_EMAIL);
+
+        mockMvc.perform(get("/auth/me").cookie(live)).andExpect(status().isOk());
+
+        mockMvc.perform(delete("/users/{id}", userId)
+                        .with(csrf())
+                        .cookie(accessCookie(ADMIN_EMAIL)))
+                .andExpect(status().isNoContent());
+
+        mockMvc.perform(get("/auth/me").cookie(live))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("UNAUTHENTICATED"));
+
+        mockMvc.perform(post("/auth/login")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"email":"%s","password":"%s"}
+                                """.formatted(USER_EMAIL, PASSWORD)))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("BAD_CREDENTIALS"));
+    }
+
+    /**
+     * 20. Administrator nie skasuje samego siebie - i to niezależnie od tego, ilu jest
+     * administratorów.
+     *
+     * Różnica wobec blokady jest tu celowa i test ją utrwala: w setUp istnieje DRUGI
+     * administrator, więc gdyby kontrolą był "ostatni administrator" (jak przy blokadzie),
+     * operacja by przeszła i test byłby czerwony. Kod odpowiedzi jest częścią asercji,
+     * bo LAST_ADMIN_CANNOT_BE_DELETED znaczyłoby coś innego: "przy drugim administratorze
+     * by się udało", czyli nieprawdę.
+     */
+    @Test
+    @DisplayName("20. Administrator nie usunie własnego konta")
+    void admin_shouldNotDeleteHimself() throws Exception {
+        mockMvc.perform(delete("/users/{id}", adminId)
+                        .with(csrf())
+                        .cookie(accessCookie(ADMIN_EMAIL)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("CANNOT_DELETE_SELF"));
+
+        assertThat(userRepository.findById(adminId)).isPresent();
+    }
+
+    /**
+     * 21. Ostatniego niezablokowanego administratora nie da się usunąć.
+     *
+     * Sekwencyjnie ta kontrola jest nieosiągalna (wołający sam jest niezablokowanym
+     * administratorem, więc przy CUDZYM celu niezablokowani są co najmniej dwaj), dlatego
+     * test ustawia stan wprost: drugi administrator zostaje zablokowany, a pierwszy próbuje
+     * skasować... jego. Sprawdzamy więc przypadek odwrotny - że zablokowany administrator
+     * NIE jest chroniony - bo to on dowodzi, że warunek liczy niezablokowanych, a nie
+     * wszystkich z rolą ADMIN. Wariant współbieżny (dwóch kasujących się nawzajem) zamyka
+     * blokada wierszy w lockUnblockedAdminIds i testem MockMvc go nie odwzoruję.
+     */
+    @Test
+    @DisplayName("21. Zablokowanego administratora wolno usunąć - liczą się niezablokowani")
+    void blockedAdmin_shouldStillBeDeletable() throws Exception {
+        Cookie admin = accessCookie(ADMIN_EMAIL);
+
+        block(admin, admin2Id, "odejście z zespołu").andExpect(status().isOk());
+
+        mockMvc.perform(delete("/users/{id}", admin2Id).with(csrf()).cookie(admin))
+                .andExpect(status().isNoContent());
+
+        assertThat(userRepository.findById(admin2Id)).isEmpty();
+        assertThat(userRepository.findById(adminId)).isPresent();
+    }
+
+    // ---------- pomocnicze do kasowania ----------
+
+    private long unusedUserId() {
+        List<Long> istniejace = List.of(adminId, admin2Id, userId);
+        return istniejace.stream().mapToLong(Long::longValue).max().orElse(0) + 10_000;
+    }
+
+    private int rowsOwnedBy(String table, Long ownerId) {
+        Integer count = jdbcTemplate.queryForObject(
+                "select count(*) from " + table + " where user_id = ?", Integer.class, ownerId);
+        return count == null ? 0 : count;
+    }
+
+    /**
+     * Zlecenie tłumaczenia razem z plikiem w magazynie - w tej kolejności, w której robi to
+     * aplikacja (najpierw obiekt, potem wiersz).
+     *
+     * Wiersz zakładamy przez repozytorium, a nie przez POST /translations: przejście przez
+     * API wciągnęłoby do tego testu limity znaków, walidację formatu i pracownika kolejki,
+     * czyli trzy rzeczy, które z kasowaniem konta nie mają nic wspólnego i które potrafią
+     * uczynić go czerwonym z zupełnie innego powodu.
+     */
+    private String seedJobWithFile(Long ownerId) {
+        String key = ObjectKeys.sourceKey(
+                ObjectKeys.jobPrefix(ownerId, ObjectKeys.newStorageId()), ".txt");
+        objectStore.put(key, "lista".getBytes(StandardCharsets.UTF_8), "text/plain");
+
+        TranslationJob job = new TranslationJob();
+        job.setUser(userRepository.findById(ownerId).orElseThrow());
+        job.setOriginalFilename("lista.txt");
+        job.setTargetLang(TargetLanguage.EN_GB);
+        job.setSourceObjectKey(key);
+        job.setCharCount(5);
+        job.setNextAttemptAt(Instant.now());
+        job.setCreatedAt(Instant.now());
+        translationJobRepository.save(job);
+
+        return key;
     }
 }

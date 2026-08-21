@@ -23,6 +23,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UserDetailsService;
+import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
@@ -149,6 +150,25 @@ public class JwtFilter extends OncePerRequestFilter {
         } catch (JwtAuthenticationException ex) {
             log.warn("Błąd JWT: {}", ex.getMessage());
             rejectRequest(response, ex.getMessage(), ex.getTokenError());
+        } catch (UsernameNotFoundException ex) {
+            /*
+             * Token poprawny, ale konta już nie ma - administrator skasował je w trakcie
+             * pracy użytkownika. Bez tej gałęzi wpadało to do generycznego catch niżej,
+             * czyli do 401 TOKEN_PROCESSING_ERROR: kodu, na którym front się NIE rozgałęzia,
+             * więc zamiast wrócić na ekran logowania pokazywał "Błąd przy przetwarzaniu
+             * tokena" przy każdym kliknięciu - zdanie o wewnętrznej awarii w sytuacji,
+             * w której nic się nie zepsuło.
+             *
+             * UNAUTHENTICATED, czyli ten sam kod co żądanie bez ciasteczka, jest tu prawdą:
+             * token wskazuje kogoś, kogo nie ma. Front spróbuje po cichu odświeżyć sesję
+             * (tokeny odświeżające zniknęły z kaskadą, więc odbije się o 401) i przejdzie
+             * na ekran logowania - dokładnie to, co ma się stać.
+             *
+             * Rejestrujemy na poziomie WARN bez adresu: id nie ma już skąd wziąć, a traceId
+             * wystarczy do skorelowania z logiem usunięcia konta.
+             */
+            log.warn("Token wskazuje konto, którego już nie ma");
+            rejectRequest(response, "Sesja wygasła. Zaloguj się ponownie.", "UNAUTHENTICATED");
         } catch (Exception ex) {
             log.error("Błąd w filtrze JWT", ex);
             rejectRequest(response, "Błąd przy przetwarzaniu tokena", "TOKEN_PROCESSING_ERROR");

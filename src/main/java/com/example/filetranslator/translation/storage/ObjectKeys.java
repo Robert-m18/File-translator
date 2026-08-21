@@ -50,6 +50,21 @@ public final class ObjectKeys {
         return "users/" + userId + "/jobs/" + storageId + "/";
     }
 
+    /**
+     * users/{userId}/ - wszystkie pliki jednego użytkownika, do skasowania razem z kontem.
+     *
+     * Działa wyłącznie dlatego, że identyfikator użytkownika stoi w kluczu NAJWYŻEJ, i to
+     * jest właśnie ten "izolacyjny" powód wymieniony w opisie układu wyżej. Gdyby prefiks
+     * zaczynał się od zlecenia, usunięcie konta wymagałoby wypisania wszystkich jego
+     * kluczy z bazy - czyli odczytu, który przy kasowaniu konta i tak zaraz znika.
+     *
+     * Identyfikator jest liczbą z naszej bazy, nie danymi od klienta, więc nie ma tu czego
+     * uciekać ani sprawdzać - w odróżnieniu od nazwy pliku, która do klucza nie trafia nigdy.
+     */
+    public static String userPrefix(Long userId) {
+        return "users/" + userId + "/";
+    }
+
     public static String sourceKey(String jobPrefix, String extension) {
         return jobPrefix + SOURCE + extension;
     }

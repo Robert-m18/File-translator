@@ -246,6 +246,22 @@ public class UserService {
     }
 
     /**
+     * Kasuje konto razem z sesjami, tokenami resetu i zleceniami tłumaczenia (kaskada
+     * po stronie bazy - patrz UserRepository.deleteAccount).
+     *
+     * Musi być wołane w transakcji wołającego, i to nie jest ozdoba: decyzja "czy wolno
+     * skasować" zapada w AdminUserService pod blokadą wierszy administratorów, a blokada
+     * trzyma tylko do końca transakcji, w której ją założono. Osobna transakcja tutaj
+     * znaczyłaby, że kontrola i kasowanie odbywają się w dwóch różnych stanach bazy.
+     *
+     * @return true, jeśli konto istniało i zostało skasowane
+     */
+    @Transactional
+    public boolean deleteAccount(Long id) {
+        return userRepository.deleteAccount(id) > 0;
+    }
+
+    /**
      * Identyfikatory niezablokowanych administratorów, z blokadą wierszy na czas transakcji.
      * Musi być wołane w transakcji wołającego - inaczej blokada spada, zanim zapadnie
      * decyzja, której miała pilnować.

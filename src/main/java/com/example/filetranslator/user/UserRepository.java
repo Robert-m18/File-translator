@@ -163,6 +163,32 @@ public interface UserRepository extends JpaRepository<User, Long> {
     int clearLoginLock(@Param("id") Long id);
 
     /**
+     * Kasuje konto. Nieodwracalnie i razem ze wszystkim, co od niego zależy.
+     *
+     * KASKADA JEST PO STRONIE BAZY, nie Hibernate'a: klucze obce w refresh_tokens,
+     * password_reset_tokens, verification_tokens i translation_jobs mają ON DELETE CASCADE
+     * (changesety 0001, 0002, 0004, 0007), więc te wiersze giną w TEJ SAMEJ transakcji co
+     * konto. Kasowanie ich osobno z aplikacji byłoby czterema zapytaniami zamiast jednego,
+     * a przy awarii w połowie zostawiłoby konto bez sesji i bez zleceń - stan gorszy niż
+     * jedno i drugie.
+     *
+     * Zapytaniem JPQL, a nie deleteById: nie ma po co wczytywać encji tylko po to, żeby ją
+     * skasować, a liczba zmienionych wierszy odróżnia "skasowano" od "ktoś był szybszy".
+     * Encja User jest jednocześnie UserDetails, więc jej wczytanie ściąga też hash hasła.
+     *
+     * NIE dotyka pending_registrations ani outbox_messages, i to jest świadome:
+     * poczekalnia jest kluczowana adresem (bez klucza obcego), a zgłoszenia na adres
+     * z ISTNIEJĄCYM kontem i tak nie powstają - confirmEmail kasuje wszystkie zgłoszenia
+     * na dany adres w chwili zakładania konta. Skrzynka nadawcza ma własną retencję
+     * (doba od wysyłki), krótszą niż cokolwiek, co dałoby się z niej odczytać.
+     *
+     * @return 1 przy skasowaniu, 0 gdy konta już nie było
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("delete from User u where u.id = :id")
+    int deleteAccount(@Param("id") Long id);
+
+    /**
      * Identyfikatory administratorów, którzy NIE są zablokowani - odczyt z blokadą wierszy.
      *
      * PESSIMISTIC_WRITE, bo bez niego dwóch administratorów blokujących się nawzajem
