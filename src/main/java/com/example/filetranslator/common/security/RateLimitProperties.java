@@ -43,6 +43,13 @@ public record RateLimitProperties(
         REDIS
     }
 
+    public enum RefillStrategy {
+        /** Cała pula odnawia się jednorazowo po upływie okna. */
+        INTERVALLY,
+        /** Pula odnawia się w sposób ciągły, proporcjonalnie do upływu czasu. */
+        GREEDY
+    }
+
     /**
      * @param path     wzorzec ścieżki w składni Ant (np. /auth/login, /auth/**)
      * @param method   metoda HTTP, której reguła dotyczy; PUSTE = dowolna metoda
@@ -63,12 +70,17 @@ public record RateLimitProperties(
              */
             String method,
             @Positive int capacity,
-            @NotNull Duration period
+            @NotNull Duration period,
+            RefillStrategy refillStrategy
     ) {
 
         /** Czy reguła obejmuje żądanie o podanej metodzie. */
         public boolean matchesMethod(String requestMethod) {
             return method == null || method.isBlank() || method.equalsIgnoreCase(requestMethod);
+        }
+
+        public RefillStrategy effectiveRefillStrategy() {
+            return refillStrategy == null ? RefillStrategy.INTERVALLY : refillStrategy;
         }
     }
 }

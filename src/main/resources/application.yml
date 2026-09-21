@@ -272,6 +272,7 @@ app:
         method: POST
         capacity: 30
         period: 1h
+        refillStrategy: greedy
 
 management:
   endpoints:

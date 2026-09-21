@@ -33,12 +33,11 @@ public interface BucketProvider {
      * inaczej przełączenie magazynu po cichu zmieniłoby zachowanie aplikacji.
      */
     static Bandwidth toBandwidth(RateLimitProperties.Policy policy) {
-        return Bandwidth.builder()
-                .capacity(policy.capacity())
-                // Cała pula wraca jednorazowo po upływie okna - czytelniejsze dla użytkownika
-                // ("5 rejestracji na godzinę") niż odnawianie ciągłe.
-                .refillIntervally(policy.capacity(), policy.period())
-                .build();
+        var builder = Bandwidth.builder().capacity(policy.capacity());
+        return switch (policy.effectiveRefillStrategy()) {
+            case INTERVALLY -> builder.refillIntervally(policy.capacity(), policy.period()).build();
+            case GREEDY -> builder.refillGreedy(policy.capacity(), policy.period()).build();
+        };
     }
 
     static BucketConfiguration toConfiguration(RateLimitProperties.Policy policy) {
