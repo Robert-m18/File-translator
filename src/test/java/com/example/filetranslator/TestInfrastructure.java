@@ -74,7 +74,7 @@ public class TestInfrastructure implements LauncherSessionListener {
     /** Wersje obrazów takie same jak w docker-compose.yml - testy mają sprawdzać to, co stoi lokalnie. */
     private static final String POSTGRES_IMAGE = "postgres:17-alpine";
     private static final String REDIS_IMAGE = "redis:7-alpine";
-    private static final String MINIO_IMAGE = "minio/minio:latest";
+    private static final String MINIO_IMAGE = "quay.io/minio/minio:latest";
 
     @Override
     public void launcherSessionOpened(LauncherSession session) {
