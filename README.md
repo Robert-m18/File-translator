@@ -602,7 +602,7 @@ który został już gdziekolwiek wykonany.
 ## Roadmapa
 
 | Etap | Zakres | Status |
-|---|---|---|
+|---|---|--|
 | 0 | Naprawa fundamentów (Liquibase, ciasteczka, walidacja) | ✅ |
 | 1 | Higiena projektu (Docker, CI, OpenAPI, Actuator, ProblemDetail) | ✅ |
 | 2 | Refaktoryzacja struktury (package-by-feature) | ✅ |
@@ -610,9 +610,9 @@ który został już gdziekolwiek wykonany.
 | 3 | Twardnienie auth (rotacja refresh tokenów, rate limiting, lockout) | ✅ |
 | 3b | Reset hasła, skrzynka nadawcza maili, `GET /auth/me`, konto administratora | ✅ |
 | 3c | Migracja bazy na PostgreSQL 17 | ✅ |
-| 4 | Rozszerzenie modelu użytkownika (dostawcy tożsamości) | ⏳ |
+| 4 | Rozszerzenie modelu użytkownika (dostawcy tożsamości) | ✅ |
 | 5 | Logowanie kodem jednorazowym / magic link | ⏳ |
-| 6 | Logowanie przez Google (OAuth2) | ⏳ |
+| 6 | Logowanie przez Google (OAuth2) | ✅ |
 | 7 | Testy integracyjne na Testcontainers | ✅ |
 | 8 | Translator plików — MVP (upload `.txt`, kolejka zadań, tłumaczenie, pobranie, mail) | ✅ |
 | 9 | Translator v2 (cache tłumaczeń, magazyn obiektowy, PDF/XLSX) | ✅ |

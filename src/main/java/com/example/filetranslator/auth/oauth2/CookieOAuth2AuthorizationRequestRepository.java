@@ -15,13 +15,11 @@ import org.springframework.http.ResponseCookie;
 import org.springframework.security.oauth2.client.web.AuthorizationRequestRepository;
 import org.springframework.security.oauth2.core.endpoint.OAuth2AuthorizationRequest;
 import org.springframework.stereotype.Component;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.json.JsonMapper;
+import org.springframework.security.jackson.SecurityJacksonModules;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.ObjectInputFilter;
-import java.io.ObjectInputStream;
-import java.io.ObjectOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Base64;
@@ -46,11 +44,12 @@ import java.util.Optional;
  * wyłącznie po HTTPS, a lokalnie po zwykłym HTTP, inaczej przeglądarka je odrzuci. Wartość Lax
  * nie wymaga atrybutu Secure, więc obie decyzje są od siebie niezależne.
  *
- * Deserializacja treści ciasteczka jest ograniczona filtrem klas. Treść przychodzi od klienta,
- * więc odtwarzanie z niej dowolnego obiektu otwierałoby drogę do ataków wykorzystujących klasy
- * dostępne na ścieżce klas. Filtr przepuszcza wyłącznie typy potrzebne do odtworzenia żądania
- * autoryzacyjnego, a limity głębokości i liczby referencji zamykają wariant z niewielką treścią
- * rozwijającą się w ogromny graf obiektów.
+ * Deserializacja treści ciasteczka korzysta z modułów Jackson dostarczanych przez
+ * Spring Security (SecurityJacksonModules). Treść przychodzi od klienta, więc odtwarzanie
+ * z niej dowolnego typu otwierałoby drogę do ataków deserializacyjnych - moduły te
+ * konfigurują PolymorphicTypeValidator, który dopuszcza wyłącznie typy zarejestrowane
+ * przez znane moduły bezpieczeństwa (m.in. OAuth2ClientJacksonModule), a nie dowolną
+ * klasę ze ścieżki klas.
  */
 @Slf4j
 @Component
@@ -67,13 +66,10 @@ public class CookieOAuth2AuthorizationRequestRepository
      */
     private static final Duration MAX_AGE = Duration.ofMinutes(3);
 
-    private static final ObjectInputFilter DESERIALIZATION_FILTER = ObjectInputFilter.Config.createFilter(
-            "maxdepth=20;maxrefs=512;maxarray=64;"
-                    + "org.springframework.security.oauth2.core.endpoint.OAuth2AuthorizationRequest;"
-                    + "org.springframework.security.oauth2.core.AuthorizationGrantType;"
-                    + "org.springframework.security.oauth2.core.endpoint.OAuth2AuthorizationResponseType;"
-                    + "java.util.*;java.lang.*;"
-                    + "!*");
+    private static final JsonMapper OBJECT_MAPPER = JsonMapper.builder()
+            .addModules(SecurityJacksonModules.getModules(
+                    CookieOAuth2AuthorizationRequestRepository.class.getClassLoader()))
+            .build();
 
     private final CookieProperties cookieProperties;
 
@@ -142,16 +138,8 @@ public class CookieOAuth2AuthorizationRequestRepository
     }
 
     private String serialize(OAuth2AuthorizationRequest authorizationRequest) {
-        try (ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-             ObjectOutputStream out = new ObjectOutputStream(bytes)) {
-            out.writeObject(authorizationRequest);
-            out.flush();
-            return Base64.getUrlEncoder().encodeToString(bytes.toByteArray());
-        } catch (IOException e) {
-            // Nie da się tego sensownie obsłużyć: bez zapisanego żądania przepływ i tak
-            // padnie przy powrocie, więc lepiej zawalić od razu, w miejscu przyczyny.
-            throw new IllegalStateException("Nie udało się zapisać żądania autoryzacyjnego OAuth2", e);
-        }
+        String json = OBJECT_MAPPER.writeValueAsString(authorizationRequest);
+        return Base64.getUrlEncoder().encodeToString(json.getBytes(StandardCharsets.UTF_8));
     }
 
     /**
@@ -166,15 +154,9 @@ public class CookieOAuth2AuthorizationRequestRepository
     private Optional<OAuth2AuthorizationRequest> deserialize(String value) {
         try {
             byte[] decoded = Base64.getUrlDecoder().decode(value);
-            try (ObjectInputStream in = new ObjectInputStream(new ByteArrayInputStream(decoded))) {
-                in.setObjectInputFilter(DESERIALIZATION_FILTER);
-                Object object = in.readObject();
-                return object instanceof OAuth2AuthorizationRequest authorizationRequest
-                        ? Optional.of(authorizationRequest)
-                        : Optional.empty();
-            }
-        } catch (IllegalArgumentException | IOException | ClassNotFoundException e) {
-            // Bez adresu i bez treści ciasteczka w logu - to jest ścieżka logowania.
+            String json = new String(decoded, StandardCharsets.UTF_8);
+            return Optional.of(OBJECT_MAPPER.readValue(json, OAuth2AuthorizationRequest.class));
+        } catch (IllegalArgumentException | JacksonException e) {
             log.debug("Odrzucono nieprawidłowe ciasteczko żądania autoryzacyjnego OAuth2: {}",
                     e.getClass().getSimpleName());
             return Optional.empty();
