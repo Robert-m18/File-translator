@@ -6,6 +6,7 @@ import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.MinIOContainer;
 import org.testcontainers.lifecycle.Startables;
 import org.testcontainers.postgresql.PostgreSQLContainer;
+import org.testcontainers.utility.DockerImageName;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.http.urlconnection.UrlConnectionHttpClient;
@@ -74,7 +75,9 @@ public class TestInfrastructure implements LauncherSessionListener {
     /** Wersje obrazów takie same jak w docker-compose.yml - testy mają sprawdzać to, co stoi lokalnie. */
     private static final String POSTGRES_IMAGE = "postgres:17-alpine";
     private static final String REDIS_IMAGE = "redis:7-alpine";
-    private static final String MINIO_IMAGE = "quay.io/minio/minio:latest";
+    private static final DockerImageName MINIO_IMAGE = DockerImageName
+            .parse("quay.io/minio/minio:latest")
+            .asCompatibleSubstituteFor("minio/minio");
 
     @Override
     public void launcherSessionOpened(LauncherSession session) {
