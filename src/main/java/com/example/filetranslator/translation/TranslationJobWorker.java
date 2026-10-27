@@ -127,11 +127,6 @@ public class TranslationJobWorker {
         if (claimed.isEmpty()) {
             return 0;
         }
-        // Pojedyncze zlecenie nie ma z czym się zrównoleglać, a przeskok na inny wątek kosztuje.
-        // Przy typowym ruchu jest to najczęstszy przypadek.
-        if (claimed.size() == 1) {
-            return translate(claimed.get(0)) ? 1 : 0;
-        }
 
         List<CompletableFuture<Boolean>> results = claimed.stream()
                 .map(job -> CompletableFuture.supplyAsync(() -> translate(job), translators))
