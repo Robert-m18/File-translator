@@ -76,7 +76,7 @@ public class TestInfrastructure implements LauncherSessionListener {
     private static final String POSTGRES_IMAGE = "postgres:17-alpine";
     private static final String REDIS_IMAGE = "redis:7-alpine";
     private static final DockerImageName MINIO_IMAGE = DockerImageName
-            .parse("quay.io/minio/minio:latest")
+            .parse("pgsty/silo:RELEASE.2026-09-16T00-00-00Z")
             .asCompatibleSubstituteFor("minio/minio");
 
     @Override
