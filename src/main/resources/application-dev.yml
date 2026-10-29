@@ -46,8 +46,14 @@ app:
     # inaczej przeglądarka w ogóle nie zapisze ciasteczka i logowanie "nie działa" bez błędu.
     secure: false
     same-site: Lax
+  metrics:
+    password: "${METRICS_PASSWORD:LokalnyMetrics1}"
 
 management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
   endpoint:
     health:
       show-details: always
