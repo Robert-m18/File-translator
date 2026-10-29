@@ -116,7 +116,26 @@ services:
        mc ilm add --expiry-days 31 local/file-translator || true) &&
       echo 'MinIO gotowe: kubelek file-translator, wygasanie po 31 dniach'
       "
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: ft-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./src/main/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./src/main/monitoring/render-password:/etc/prometheus/render-password:ro
+      - prometheus-data:/prometheus
 
+  grafana:
+    image: grafana/grafana:latest
+    container_name: ft-grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./src/main/monitoring/grafana/datasource.yml:/etc/grafana/provisioning/datasources/datasource.yml:ro
+    depends_on:
+      - prometheus
   app:
     build:
       context: .
@@ -188,3 +207,5 @@ services:
 volumes:
   postgres-data:
   minio-data:
+  prometheus-data:
+  grafana-data:

@@ -275,10 +275,13 @@ app:
         refillStrategy: greedy
 
 management:
+  metrics:
+    tags:
+        application: "${spring.application.name}"
   endpoints:
     web:
       exposure:
-        include: health,info,metrics,prometheus
+        include: health,info,metrics
   endpoint:
     health:
       # Osobne endpointy /health/liveness i /health/readiness dla orkiestratora (k8s, ECS)
