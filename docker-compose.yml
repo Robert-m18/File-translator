@@ -122,8 +122,8 @@ services:
     ports:
       - "9090:9090"
     volumes:
-      - ./src/main/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ./src/main/monitoring/render-password:/etc/prometheus/render-password:ro
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/render-password:/etc/prometheus/render-password:ro
       - prometheus-data:/prometheus
 
   grafana:
@@ -133,7 +133,7 @@ services:
       - "3000:3000"
     volumes:
       - grafana-data:/var/lib/grafana
-      - ./src/main/monitoring/grafana/datasource.yml:/etc/grafana/provisioning/datasources/datasource.yml:ro
+      - ./monitoring/grafana/datasource.yml:/etc/grafana/provisioning/datasources/datasource.yml:ro
     depends_on:
       - prometheus
   app:
