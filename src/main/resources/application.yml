@@ -103,7 +103,7 @@ app:
     # Adres w nagłówku From i w kopercie SMTP. Osobne ustawienie, bo login do serwera
     # SMTP (spring.mail.username) bardzo często adresem NIE jest - u dostawców typu SES
     # czy SendGrid to klucz API. Serwer odrzuca wtedy całą wysyłkę na MAIL FROM.
-    from: "${MAIL_FROM:no-reply@file-translator.local}"\
+    from: "${MAIL_FROM:no-reply@file-translator.local}"
     from-name: "${MAIL_FROM_NAME:File Translator}"
   cookie:
     # secure=true wymaga HTTPS - na localhost po http przeglądarka takie ciasteczko odrzuci
