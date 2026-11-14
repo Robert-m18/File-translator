@@ -50,6 +50,7 @@ app:
     # dostawca poczty ma zweryfikowany dla używanej domeny. Domyślny adres z profilu
     # bazowego przeszedłby start aplikacji i wywalił się dopiero na pierwszym mailu.
     from: "${MAIL_FROM}"
+    from-name: "${MAIL_FROM_NAME}"
   cookie:
     secure: true
     # None, żeby ciasteczka docierały do API stojącego pod inną domeną niż SPA.

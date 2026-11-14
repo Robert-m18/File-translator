@@ -15,6 +15,8 @@ import org.springframework.stereotype.Service;
 import org.thymeleaf.TemplateEngine;
 import org.thymeleaf.context.Context;
 
+import java.io.UnsupportedEncodingException;
+
 /**
  * Wysyłka maili transakcyjnych: potwierdzenie rejestracji, reset hasła oraz
  * powiadomienie o próbie rejestracji na istniejący adres.
@@ -32,6 +34,7 @@ public class EmailService {
     private final TemplateEngine templateEngine;
     private final String frontendUrl;
     private final String mailFrom;
+    private final String mailFromName;
 
     @Autowired
     public EmailService(JavaMailSender mailSender,
@@ -43,11 +46,13 @@ public class EmailService {
                         // loginu jako nadawcy kończy się odrzuceniem koperty przez serwer i tym,
                         // że nie wychodzi żadna wiadomość - a wtedy nie da się potwierdzić
                         // rejestracji ani, w konsekwencji, zalogować.
-                        @Value("${app.mail.from}") String mailFrom) {
+                        @Value("${app.mail.from}") String mailFrom,
+                        @Value("${app.mail.from-name}") String mailFromName) {
         this.mailSender = mailSender;
         this.templateEngine = templateEngine;
         this.frontendUrl = frontendUrl;
         this.mailFrom = mailFrom;
+        this.mailFromName = mailFromName;
     }
 
     public void sendVerificationEmail(String toEmail, String name, String token) {
@@ -112,18 +117,19 @@ public class EmailService {
             MimeMessage message = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(message, "utf-8");
             helper.setTo(toEmail);
-            helper.setFrom(mailFrom);
+            helper.setFrom(mailFrom, mailFromName);
             helper.setSubject(subject);
             helper.setText(htmlBody, true);
 
             mailSender.send(message);
             log.debug("Wysłano mail {}", opis);
 
-        } catch (MessagingException e) {
+        } catch (MessagingException | UnsupportedEncodingException e) {
             // Wyjątek kontrolowany nie jest przepuszczany dalej, żeby nie zaśmiecać sygnatur
             // w górę - wysyłka łapie wyjątek ogólny i zapisuje powód porażki.
             throw new MailDeliveryException("Nie udało się zbudować maila " + opis, e);
         }
+
         // Wyjątek niekontrolowany leci wyżej sam - zgłasza go wysyłka przy niedostępnym
         // albo odrzucającym serwerze pocztowym, czyli w najczęstszym przypadku awarii.
 
